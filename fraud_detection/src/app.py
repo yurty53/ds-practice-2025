@@ -15,30 +15,29 @@ from concurrent import futures
 
 # Create a class to define the server functions, derived from
 # fraud_detection_pb2_grpc.HelloServiceServicer
-class HelloService(fraud_detection_grpc.HelloServiceServicer):
+class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
     # Create an RPC function to say hello
     def SayHello(self, request, context):
-        # Create a HelloResponse object
-        response = fraud_detection.HelloResponse()
-        # Set the greeting field of the response object
-        response.greeting = "Hello, " + request.name
-        # Print the greeting message
-        print(response.greeting)
-        # Return the response object
+        print(f"Received request - Card: {request.card_number}, Amount: {request.order_amount}")
+    
+        # Flag a specific card number as fraudulent for testing
+        is_fraud = request.card_number == "1234-5678-9012-3456"
+    
+        if is_fraud:
+            print("Fraud detected: test card number flagged")
+    
+        response = fraud_detection.FraudResponse()
+        response.is_fraud = is_fraud
         return response
 
 def serve():
-    # Create a gRPC server
     server = grpc.server(futures.ThreadPoolExecutor())
-    # Add HelloService
-    fraud_detection_grpc.add_HelloServiceServicer_to_server(HelloService(), server)
-    # Listen on port 50051
+    fraud_detection_grpc.add_FraudDetectionserviceServicer_to_server(FraudDetectionService(), server)
+    
     port = "50051"
     server.add_insecure_port("[::]:" + port)
-    # Start the server
     server.start()
-    print("Server started. Listening on port 50051.")
-    # Keep thread alive
+    print("Fraud Detection server started. Listening on port 50051.")
     server.wait_for_termination()
 
 if __name__ == '__main__':
