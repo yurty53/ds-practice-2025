@@ -16,10 +16,10 @@ def greet(name='you'):
     # Establish a connection with the fraud-detection gRPC service.
     with grpc.insecure_channel('fraud_detection:50051') as channel:
         # Create a stub object.
-        stub = fraud_detection_grpc.HelloServiceStub(channel)
+        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
         # Call the service through the stub object.
-        response = stub.SayHello(fraud_detection.HelloRequest(name=name))
-    return response.greeting
+        response = stub.CheckFraud(fraud_detection.FraudDetectionRequest(card_number=name))
+    return response.is_fraud
 
 # Import Flask.
 # Flask is a web framework for Python.
