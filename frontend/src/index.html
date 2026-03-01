@@ -73,7 +73,8 @@
     </div>
 
     <script>
-        const items = [
+        const stored = localStorage.getItem('cart');
+        const items = stored ? JSON.parse(stored) : [
             { name: "Book A", quantity: 1 },
             { name: "Book B", quantity: 2 }
         ];
@@ -81,7 +82,7 @@
         const itemListElement = document.getElementById('itemList');
         items.forEach(item => {
             const li = document.createElement('li');
-            li.textContent = `${item.name} - Quantity: ${item.quantity}`;
+            li.textContent = `${item.name || item.title} - Quantity: ${item.quantity}`;
             li.className = "bg-gray-100 p-3 rounded-lg";
             itemListElement.appendChild(li);
         });
@@ -101,7 +102,7 @@
                     cvv: formData.get('cvv'),
                 },
                 userComment: formData.get('userComment'),
-                items: items,
+                items: items.map(item => ({ name: item.name || item.title, quantity: item.quantity })),
                 billingAddress: {
                     street: formData.get('billingStreet'),
                     city: formData.get('billingCity'),

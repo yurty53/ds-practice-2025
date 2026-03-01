@@ -15,6 +15,11 @@ sys.path.insert(0, transaction_verification_grpc_path)
 import transaction_verification_pb2 as transaction_verification
 import transaction_verification_pb2_grpc as transaction_verification_grpc
 
+suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
+sys.path.insert(0, suggestions_grpc_path)
+import suggestions_pb2 as suggestions
+import suggestions_pb2_grpc as suggestions_grpc
+
 import grpc
 
 def check_fraud(card_number, order_amount):
@@ -37,6 +42,14 @@ def check_transaction(card_number, items):
             items=items
         ))
     return response.is_valid, response.reason
+
+def get_suggestions(book_titles):
+    with grpc.insecure_channel('suggestions:50053') as channel:
+        stub = suggestions_grpc.SuggestionsServiceStub(channel)
+        response = stub.GetSuggestions(suggestions.SuggestionsRequest(
+            book_titles=book_titles
+        ))
+    return [{'title': book.title, 'author': book.author} for book in response.books]
 
 # Import Flask.
 # Flask is a web framework for Python.
@@ -61,6 +74,13 @@ def index():
     response = check_fraud(card_number='test', order_amount=0)
     # Return the response.
     return "Fraud detected: " + str(response)
+
+@app.route('/suggestions', methods=['POST'])
+def suggestions_route():
+    request_data = json.loads(request.data)
+    book_titles = request_data.get('book_titles', [])
+    suggested = get_suggestions(book_titles)
+    return {'suggestions': suggested}
 
 @app.route('/checkout', methods=['POST'])
 def checkout():
@@ -88,13 +108,11 @@ def checkout():
             'suggestedBooks': []
         }
     else:
+        suggested = get_suggestions(items)
         order_status_response = {
             'orderId': '12345',
             'status': 'Order Approved',
-            'suggestedBooks': [
-                {'bookId': '123', 'title': 'The Best Book', 'author': 'Author 1'},
-                {'bookId': '456', 'title': 'The Second Best Book', 'author': 'Author 2'}
-            ]
+            'suggestedBooks': suggested
         }
 
     return order_status_response
