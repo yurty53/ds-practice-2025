@@ -15,15 +15,21 @@ sys.path.insert(0, transaction_verification_grpc_path)
 import transaction_verification_pb2 as transaction_verification
 import transaction_verification_pb2_grpc as transaction_verification_grpc
 
+suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
+sys.path.insert(0, suggestions_grpc_path)
+import suggestions_pb2 as suggestions
+import suggestions_pb2_grpc as suggestions_grpc
+
+
 import grpc
 
 def check_fraud(card_number, order_amount):
     # Establish a connection with the fraud-detection gRPC service.
     with grpc.insecure_channel('fraud_detection:50051') as channel:
         # Create a stub object.
-        stub = fraud_detection_grpc.FraudDetectionserviceStub(channel)
+        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
         # Call the service through the stub object.
-        response = stub.SayHello(fraud_detection.FraudRequest(
+        response = stub.DetectFraud(fraud_detection.FraudRequest(
             card_number=card_number,
             order_amount=order_amount
         ))
@@ -37,6 +43,15 @@ def check_transaction(card_number, items):
             items=items
         ))
     return response.is_valid, response.reason
+
+def check_suggestions(card_number, items):
+    with grpc.insecure_channel('suggestions:50053') as channel:
+        stub = suggestions_grpc.SuggestionsServiceStub(channel)
+        response = stub.GetSuggestions(suggestions.SuggestionsRequest(
+            items=items
+        ))
+    return response.suggested_books
+
 
 # Import Flask.
 # Flask is a web framework for Python.
