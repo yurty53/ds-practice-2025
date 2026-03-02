@@ -44,22 +44,30 @@ class FraudDetectionserviceStub(object):
 class FraudDetectionserviceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def SayHello(self, request, context):
+    def CheckFraud(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
 
+<<<<<<< HEAD
 def add_FraudDetectionserviceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'SayHello': grpc.unary_unary_rpc_method_handler(
                     servicer.SayHello,
+=======
+def add_FraudDetectionServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'CheckFraud': grpc.unary_unary_rpc_method_handler(
+                    servicer.CheckFraud,
+>>>>>>> 6029a347c502f5217e366d8365b45c83ce6c1fd5
                     request_deserializer=fraud__detection__pb2.FraudRequest.FromString,
                     response_serializer=fraud__detection__pb2.FraudResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
+<<<<<<< HEAD
             'fraud_detection.FraudDetectionservice', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
     server.add_registered_method_handlers('fraud_detection.FraudDetectionservice', rpc_method_handlers)
@@ -67,10 +75,19 @@ def add_FraudDetectionserviceServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class FraudDetectionservice(object):
+=======
+            'fraud_detection.FraudDetectionService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('fraud_detection.FraudDetectionService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class FraudDetectionService(object):
+>>>>>>> 6029a347c502f5217e366d8365b45c83ce6c1fd5
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def SayHello(request,
+    def CheckFraud(request,
             target,
             options=(),
             channel_credentials=None,
@@ -83,7 +100,11 @@ class FraudDetectionservice(object):
         return grpc.experimental.unary_unary(
             request,
             target,
+<<<<<<< HEAD
             '/fraud_detection.FraudDetectionservice/SayHello',
+=======
+            '/fraud_detection.FraudDetectionService/CheckFraud',
+>>>>>>> 6029a347c502f5217e366d8365b45c83ce6c1fd5
             fraud__detection__pb2.FraudRequest.SerializeToString,
             fraud__detection__pb2.FraudResponse.FromString,
             options,
