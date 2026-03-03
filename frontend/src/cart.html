@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Cart & Checkout</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center overflow-y-auto">
+  <div class="w-full max-w-3xl bg-white p-6 rounded-lg shadow-md">
+    <h1 class="text-2xl font-bold mb-4">Your Cart</h1>
+
+    <div id="cartArea" class="mb-6"></div>
+
+    <div id="suggestionsArea" class="mb-6"></div>
+
+    <form id="checkoutForm">
+      <h2 class="text-lg font-semibold mb-3">Billing & Payment</h2>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium">Name</label>
+        <input id="name" name="name" type="text" value="John Doe" required class="w-full border rounded p-2 mt-1">
+      </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium">Contact (email)</label>
+        <input id="contact" name="contact" type="email" value="john.doe@example.com" required class="w-full border rounded p-2 mt-1">
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium">Credit Card Number</label>
+        <input id="creditCard" name="creditCard" type="text" value="4111111111111111" required class="w-full border rounded p-2 mt-1">
+      </div>
+
+      <div class="mb-4 grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium">Expiration</label>
+          <input id="expirationDate" name="expirationDate" type="text" value="12/25" required class="w-full border rounded p-2 mt-1">
+        </div>
+        <div>
+          <label class="block text-sm font-medium">CVV</label>
+          <input id="cvv" name="cvv" type="text" value="123" required class="w-full border rounded p-2 mt-1">
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium">Comment</label>
+        <textarea id="userComment" name="userComment" class="w-full border rounded p-2 mt-1">Please handle with care.</textarea>
+      </div>
+
+      <div class="flex items-center space-x-3">
+        <a href="index.html" class="text-sm text-gray-600 underline">Back to Shop</a>
+        <button type="submit" class="ml-auto bg-blue-600 text-white px-4 py-2 rounded">Submit Order</button>
+      </div>
+    </form>
+
+    <div id="response" class="mt-6 p-4 border rounded hidden"></div>
+  </div>
+
+  <script>
+    const booksCatalog = [
+      { id: "b1", title: "Book A", author: "Author A", genres: ["Fiction","Romance"], price: 9.99 },
+      { id: "b2", title: "Book B", author: "Author B", genres: ["History","Non-Fiction"], price: 12.50 },
+      { id: "b3", title: "Book C", author: "Author C", genres: ["Science Fiction","Adventure"], price: 8.75 },
+      { id: "b4", title: "Book D", author: "Author D", genres: ["Mystery","Thriller"], price: 14.90 },
+      { id: "b5", title: "Book E", author: "Author E", genres: ["Biography","History"], price: 7.00 },
+      { id: "b6", title: "Book F", author: "Author F", genres: ["Fantasy","Adventure"], price: 11.25 },
+      { id: "b7", title: "Book G", author: "Author G", genres: ["Romance","Drama"], price: 6.50 },
+      { id: "b8", title: "Book H", author: "Author H", genres: ["Crime","Thriller"], price: 15.00 },
+      { id: "b9", title: "Book I", author: "Author I", genres: ["Business","Self-Help"], price: 10.00 },
+      { id: "b10", title: "Book J", author: "Author J", genres: ["Philosophy","Non-Fiction"], price: 9.25 }
+    ];
+
+    const cartArea = document.getElementById('cartArea');
+    const suggestionsArea = document.getElementById('suggestionsArea');
+    const responseDiv = document.getElementById('response');
+
+    let items = JSON.parse(localStorage.getItem('cart') || '[]');
+
+    function renderCart() {
+      if (!items || items.length === 0) {
+        cartArea.innerHTML = `<div class="p-4 bg-yellow-50 rounded">Your cart is empty. <a href="index.html" class="underline">Go to shop</a></div>`;
+        suggestionsArea.innerHTML = '';
+        return;
+      }
+      const rows = items.map(it => `
+        <div class="flex items-center justify-between bg-gray-100 p-3 rounded mb-2">
+          <div>
+            <div class="font-medium">${it.name}</div>
+            <div class="text-xs text-gray-600">${(it.genres||[]).join(', ')}</div>
+            <div class="text-sm text-gray-700">Qty: ${it.quantity}</div>
+          </div>
+          <div class="text-sm font-medium">${(it.price * it.quantity).toFixed(2)} $</div>
+        </div>
+      `).join('');
+      const total = items.reduce((s,i) => s + i.price * i.quantity, 0).toFixed(2);
+      cartArea.innerHTML = `<div class="mb-3">${rows}</div>
+        <div class="text-right font-semibold">Total: ${total} $</div>`;
+      renderSuggestions();
+    }
+
+    function renderSuggestions() {
+      // collect selected genres
+      const selectedGenres = new Set(items.flatMap(i => i.genres || []));
+      const selectedIds = new Set(items.map(i => i.id));
+      const suggestions = booksCatalog
+        .filter(b => !selectedIds.has(b.id))
+        .map(b => {
+          const common = b.genres.filter(g => selectedGenres.has(g));
+          return { book: b, score: common.length };
+        })
+        .filter(x => x.score > 0)
+        .sort((a,b) => b.score - a.score)
+        .slice(0,3)
+        .map(x => x.book);
+
+      if (suggestions.length === 0) {
+        suggestionsArea.innerHTML = `<div class="p-3 bg-gray-50 rounded">No suggestions available. Add more books to get suggestions.</div>`;
+        return;
+      }
+
+      suggestionsArea.innerHTML = `<h2 class="text-lg font-semibold mb-2">Suggested for you</h2>
+        <div class="grid grid-cols-1 gap-2">${suggestions.map(s => `
+          <div class="flex items-center justify-between bg-blue-50 p-3 rounded">
+            <div>
+              <div class="font-medium">${s.title}</div>
+              <div class="text-xs text-gray-600">${s.author} • ${s.genres.join(', ')}</div>
+            </div>
+            <div class="text-sm font-medium">${s.price.toFixed(2)} $</div>
+          </div>
+        `).join('')}</div>`;
+    }
+
+    renderCart();
+
+    document.getElementById('checkoutForm').addEventListener('submit', async function(e){
+      e.preventDefault();
+      if (!items || items.length === 0) {
+        alert('Cart is empty');
+        return;
+      }
+
+      const form = e.target;
+      const payload = {
+        user: { name: form.name.value, contact: form.contact.value },
+        creditCard: { number: form.creditCard.value, expirationDate: form.expirationDate.value, cvv: form.cvv.value },
+        userComment: form.userComment.value,
+        items: items,
+        order_amount: items.reduce((s,i) => s + i.price * i.quantity, 0)
+      };
+
+      try {
+        const res = await fetch('http://localhost:8081/checkout', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+
+        if (res.ok) {
+          localStorage.removeItem('cart');
+          items = [];
+          renderCart();
+          responseDiv.innerHTML = `<strong>Order status: ${result.status}</strong><br>Order ID: ${result.orderId || 'N/A'}`;
+          responseDiv.className = "mt-6 p-4 border rounded bg-green-50 text-green-700";
+        } else {
+          responseDiv.textContent = result.reason || JSON.stringify(result);
+          responseDiv.className = "mt-6 p-4 border rounded bg-red-50 text-red-700";
+        }
+        responseDiv.style.display = 'block';
+      } catch (err) {
+        responseDiv.textContent = `Unexpected error: ${err.message}`;
+        responseDiv.className = "mt-6 p-4 border rounded bg-red-50 text-red-700";
+        responseDiv.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

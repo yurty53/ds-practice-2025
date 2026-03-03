@@ -15,6 +15,11 @@ sys.path.insert(0, transaction_verification_grpc_path)
 import transaction_verification_pb2 as transaction_verification
 import transaction_verification_pb2_grpc as transaction_verification_grpc
 
+suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
+sys.path.insert(0, suggestions_grpc_path)
+import suggestions_pb2 as suggestions
+import suggestions_pb2_grpc as suggestions_grpc
+
 import grpc
 
 def check_fraud(card_number, order_amount):
@@ -38,6 +43,20 @@ def check_transaction(card_number, items):
         ))
     return response.is_valid, response.reason
 
+
+def get_suggestions(items):
+    """Call suggestions gRPC service and return a list of dicts for suggested books."""
+    with grpc.insecure_channel('suggestions:50053') as channel:
+        stub = suggestions_grpc.SuggestionserviceStub(channel)
+        # Build request
+        req = suggestions.SuggestionRequest(items=items)
+        resp = stub.GetSuggestions(req)
+    # Convert response objects to plain dicts
+    out = []
+    for b in resp.suggestedBooks:
+        out.append({'bookId': b.bookId, 'title': b.title, 'author': b.author})
+    return out
+
 # Import Flask.
 # Flask is a web framework for Python.
 # It allows you to build a web application quickly.
@@ -45,11 +64,17 @@ def check_transaction(card_number, items):
 from flask import Flask, request
 from flask_cors import CORS
 import json
+from concurrent.futures import ThreadPoolExecutor
+import logging
 
 # Create a simple Flask app.
 app = Flask(__name__)
 # Enable CORS for the app.
 CORS(app, resources={r'/*': {'origins': '*'}})
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 # Define a GET endpoint.
 @app.route('/', methods=['GET'])
@@ -70,31 +95,42 @@ def checkout():
     # Get request object data to json
     request_data = json.loads(request.data)
     # Print request object data
-    print("Request Data:", request_data.get('items'))
+    app.logger.info("Request Data: %s", request_data.get('items'))
 
     # Call fraud detection service
     card_number = request_data.get('creditCard', {}).get('number', '')
+    # Fake an order amount based on the number of items
     order_amount = sum(item.get('quantity', 1) for item in request_data.get('items', []))
     items = [item.get('name', '') for item in request_data.get('items', [])]
     
-    is_fraud = check_fraud(card_number, order_amount)
-    is_valid, reason = check_transaction(card_number, items)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        future_fraud = executor.submit(check_fraud, card_number, order_amount)
+        future_transaction = executor.submit(check_transaction, card_number, items)
+        future_suggestions = executor.submit(get_suggestions, items)
+
+        is_fraud = future_fraud.result()
+        is_valid, reason = future_transaction.result()
+        suggested = future_suggestions.result()
 
     # Dummy response following the provided YAML specification for the bookstore
-    if is_fraud or not is_valid:
+    if not is_valid:
         order_status_response = {
             'orderId': '12345',
             'status': 'Order Rejected',
+            'suggestedBooks': []
+        }
+    elif is_fraud:
+        order_status_response = {
+            'orderId': '12345',
+            'status': 'Order Rejected',
+            'reason': 'fraud_detected',
             'suggestedBooks': []
         }
     else:
         order_status_response = {
             'orderId': '12345',
             'status': 'Order Approved',
-            'suggestedBooks': [
-                {'bookId': '123', 'title': 'The Best Book', 'author': 'Author 1'},
-                {'bookId': '456', 'title': 'The Second Best Book', 'author': 'Author 2'}
-            ]
+            'suggestedBooks': suggested
         }
 
     return order_status_response
