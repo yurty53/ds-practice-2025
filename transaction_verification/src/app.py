@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 class TransactionVerificationService(transaction_verification_grpc.TransactionVerificationServiceServicer):
     def VerifyTransaction(self, request, context):
+        """
+        Verify transaction validity.
+        Rules: card must be 16 digits, order must have items.
+        """
         logger.info(f"Received request | card: {request.card_number} | items: {list(request.items)}")
     
         if not request.items:
@@ -41,6 +45,7 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
         return response
 
 def serve():
+    """Start gRPC server on port 50052."""
     server = grpc.server(futures.ThreadPoolExecutor())
     transaction_verification_grpc.add_TransactionVerificationServiceServicer_to_server(TransactionVerificationService(), server)
     

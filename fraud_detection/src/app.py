@@ -23,11 +23,10 @@ logger = logging.getLogger(__name__)
 # Create a class to define the server functions, derived from
 # fraud_detection_pb2_grpc.HelloServiceServicer
 class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
-    # Create an RPC function to say hello
     def SayHello(self, request, context):
+        """Check if transaction is fraudulent. Test card "1234-5678-9012-3456" is flagged."""
         logger.info(f"Received request | card: {request.card_number} | amount: {request.order_amount}")
     
-        # Flag a specific card number as fraudulent for testing
         is_fraud = request.card_number == "1234-5678-9012-3456"
     
         if is_fraud:
@@ -40,6 +39,7 @@ class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
         return response
 
 def serve():
+    """Start gRPC server on port 50051."""
     server = grpc.server(futures.ThreadPoolExecutor())
     fraud_detection_grpc.add_FraudDetectionserviceServicer_to_server(FraudDetectionService(), server)
     

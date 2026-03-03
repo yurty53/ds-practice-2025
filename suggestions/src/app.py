@@ -17,6 +17,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Book catalogue organized by genre
 CATALOGUE = {
     "Magical Realism": [
         {"title": "100 Years of Solitude", "author": "Gabriel García Márquez"},
@@ -45,6 +46,7 @@ CATALOGUE = {
     ],
 }
 
+# Build reverse mapping for O(1) genre lookup
 TITLE_TO_GENRE = {}
 for genre, books in CATALOGUE.items():
     for book in books:
@@ -53,9 +55,14 @@ for genre, books in CATALOGUE.items():
 
 class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
     def GetSuggestions(self, request, context):
+        """
+        Get book recommendations based on cart contents.
+        Algorithm: find genres of cart books, suggest other books from same genres.
+        """
         cart_titles = set(request.book_titles)
         logger.info(f"GetSuggestions called | cart: {list(cart_titles)}")
 
+        # Identify genres of books in cart
         genres = set()
         for title in cart_titles:
             if title in TITLE_TO_GENRE:
@@ -63,6 +70,7 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
 
         logger.info(f"Detected genres: {genres}")
 
+        # Find suggestions from same genres, excluding cart items
         suggested = []
         for genre in genres:
             for book in CATALOGUE[genre]:
@@ -77,6 +85,7 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
 
 
 def serve():
+    """Start gRPC server on port 50053."""
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     suggestions_grpc.add_SuggestionsServiceServicer_to_server(SuggestionsService(), server)
     server.add_insecure_port('[::]:50053')
