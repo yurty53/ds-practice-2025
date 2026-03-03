@@ -14,10 +14,10 @@ import grpc
 from concurrent import futures
 
 # Create a class to define the server functions, derived from
-# fraud_detection_pb2_grpc.HelloServiceServicer
-class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
-    # Create an RPC function to say hello
-    def SayHello(self, request, context):
+# fraud_detection_pb2_grpc.FraudDetectionServiceServicer
+class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
+    # Create an RPC function to detect fraud
+    def DetectFraud(self, request, context):
         print(f"Received request - Card: {request.card_number}, Amount: {request.order_amount}")
     
         # Flag a specific card number as fraudulent for testing
@@ -32,7 +32,8 @@ class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor())
-    fraud_detection_grpc.add_FraudDetectionserviceServicer_to_server(FraudDetectionService(), server)
+    # use regenerated helper with correct capitalization
+    fraud_detection_grpc.add_FraudDetectionServiceServicer_to_server(FraudDetectionService(), server)
     
     port = "50051"
     server.add_insecure_port("[::]:" + port)

@@ -14,7 +14,8 @@ import grpc
 from concurrent import futures
 
 # Create a class to define the server functions, derived from
-# suggestions_pb2_grpc.HelloServiceServicer
+# suggestions_pb2_grpc.SuggestionsserviceServicer (generated from .proto)
+
 class SuggestionsService(suggestions_grpc.SuggestionsserviceServicer):
     # simple in‑memory mapping from purchased product to book recommendations
     BOOK_RECOMMENDATIONS = {
@@ -49,10 +50,11 @@ class SuggestionsService(suggestions_grpc.SuggestionsserviceServicer):
         return list(suggestions_set)[:3]
 
     # Create an RPC function to suggest
-    def SuggestBooks(self, request):
+    def GetSuggestions(self, request, context):
         print(f"Received request - Items: {request.items}")
         response = suggestions.SuggestionsResponse()
-        response.suggestions.extend(self._generate_suggestions(request.items))
+        # field name changed after regeneration
+        response.suggested_books.extend(self._generate_suggestions(request.items))
         return response
 
 def serve():

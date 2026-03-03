@@ -44,8 +44,9 @@ def check_transaction(card_number, items):
         ))
     return response.is_valid, response.reason
 
-def check_suggestions(card_number, items):
+def check_suggestions(items):
     with grpc.insecure_channel('suggestions:50053') as channel:
+        # create stub from generated module
         stub = suggestions_grpc.SuggestionsServiceStub(channel)
         response = stub.GetSuggestions(suggestions.SuggestionsRequest(
             items=items
@@ -95,7 +96,7 @@ def checkout():
     is_fraud = check_fraud(card_number, order_amount)
     is_valid, reason = check_transaction(card_number, items)
 
-    # Dummy response following the provided YAML specification for the bookstore
+    # response logic: if fraud or invalid transaction, reject; otherwise ask suggestions service
     if is_fraud or not is_valid:
         order_status_response = {
             'orderId': '12345',
@@ -106,10 +107,7 @@ def checkout():
         order_status_response = {
             'orderId': '12345',
             'status': 'Order Approved',
-            'suggestedBooks': [
-                {'bookId': '123', 'title': 'The Best Book', 'author': 'Author 1'},
-                {'bookId': '456', 'title': 'The Second Best Book', 'author': 'Author 2'}
-            ]
+            'suggestedBooks': check_suggestions(items)
         }
 
     return order_status_response

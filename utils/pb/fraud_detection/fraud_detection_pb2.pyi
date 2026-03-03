@@ -15,5 +15,5 @@ class FraudRequest(_message.Message):
 class FraudResponse(_message.Message):
     __slots__ = ("is_fraud",)
     IS_FRAUD_FIELD_NUMBER: _ClassVar[int]
-    is_fraud: str
-    def __init__(self, is_fraud: _Optional[str] = ...) -> None: ...
+    is_fraud: bool
+    def __init__(self, is_fraud: bool = ...) -> None: ...

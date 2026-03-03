@@ -34,8 +34,8 @@ class SuggestionsserviceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.SayHello = channel.unary_unary(
-                '/suggestions.Suggestionsservice/SayHello',
+        self.GetSuggestions = channel.unary_unary(
+                '/suggestions.Suggestionsservice/GetSuggestions',
                 request_serializer=suggestions__pb2.SuggestionsRequest.SerializeToString,
                 response_deserializer=suggestions__pb2.SuggestionsResponse.FromString,
                 _registered_method=True)
@@ -44,7 +44,7 @@ class SuggestionsserviceStub(object):
 class SuggestionsserviceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def SayHello(self, request, context):
+    def GetSuggestions(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -53,8 +53,8 @@ class SuggestionsserviceServicer(object):
 
 def add_SuggestionsserviceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'SayHello': grpc.unary_unary_rpc_method_handler(
-                    servicer.SayHello,
+            'GetSuggestions': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetSuggestions,
                     request_deserializer=suggestions__pb2.SuggestionsRequest.FromString,
                     response_serializer=suggestions__pb2.SuggestionsResponse.SerializeToString,
             ),
@@ -70,7 +70,7 @@ class Suggestionsservice(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def SayHello(request,
+    def GetSuggestions(request,
             target,
             options=(),
             channel_credentials=None,
@@ -83,7 +83,7 @@ class Suggestionsservice(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/suggestions.Suggestionsservice/SayHello',
+            '/suggestions.Suggestionsservice/GetSuggestions',
             suggestions__pb2.SuggestionsRequest.SerializeToString,
             suggestions__pb2.SuggestionsResponse.FromString,
             options,
