@@ -21,8 +21,17 @@ import suggestions_pb2 as suggestions
 import suggestions_pb2_grpc as suggestions_grpc
 
 import grpc
+import threading
+import logging
 
-def check_fraud(card_number, order_amount):
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def check_fraud(card_number, order_amount, results):
+    logger.info(f"Calling fraud detection | card: {card_number} | amount: {order_amount}")
     # Establish a connection with the fraud-detection gRPC service.
     with grpc.insecure_channel('fraud_detection:50051') as channel:
         # Create a stub object.
@@ -32,24 +41,30 @@ def check_fraud(card_number, order_amount):
             card_number=card_number,
             order_amount=order_amount
         ))
-    return response.is_fraud
+    results['is_fraud'] = response.is_fraud
+    logger.info(f"Fraud detection result: is_fraud={response.is_fraud}")
 
-def check_transaction(card_number, items):
+def check_transaction(card_number, items, results):
+    logger.info(f"Calling transaction verification | card: {card_number} | items: {items}")
     with grpc.insecure_channel('transaction_verification:50052') as channel:
         stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
         response = stub.VerifyTransaction(transaction_verification.TransactionRequest(
             card_number=card_number,
             items=items
         ))
-    return response.is_valid, response.reason
+    results['is_valid'] = response.is_valid
+    results['reason'] = response.reason
+    logger.info(f"Transaction verification result: is_valid={response.is_valid} | reason={response.reason}")
 
-def get_suggestions(book_titles):
+def get_suggestions(book_titles, results):
+    logger.info(f"Calling suggestions service | titles: {book_titles}")
     with grpc.insecure_channel('suggestions:50053') as channel:
         stub = suggestions_grpc.SuggestionsServiceStub(channel)
         response = stub.GetSuggestions(suggestions.SuggestionsRequest(
             book_titles=book_titles
         ))
-    return [{'title': book.title, 'author': book.author} for book in response.books]
+    results['suggestions'] = [{'title': book.title, 'author': book.author} for book in response.books]
+    logger.info(f"Suggestions result: {results['suggestions']}")
 
 # Import Flask.
 # Flask is a web framework for Python.
@@ -79,8 +94,9 @@ def index():
 def suggestions_route():
     request_data = json.loads(request.data)
     book_titles = request_data.get('book_titles', [])
-    suggested = get_suggestions(book_titles)
-    return {'suggestions': suggested}
+    results = {}
+    get_suggestions(book_titles, results)
+    return {'suggestions': results.get('suggestions', [])}
 
 @app.route('/checkout', methods=['POST'])
 def checkout():
@@ -90,29 +106,44 @@ def checkout():
     # Get request object data to json
     request_data = json.loads(request.data)
     # Print request object data
-    print("Request Data:", request_data.get('items'))
+    logger.info(f"Checkout request received | items: {request_data.get('items')}")
 
     # Call fraud detection service
     card_number = request_data.get('creditCard', {}).get('number', '')
     order_amount = sum(item.get('quantity', 1) for item in request_data.get('items', []))
     items = [item.get('name', '') for item in request_data.get('items', [])]
     
-    is_fraud = check_fraud(card_number, order_amount)
-    is_valid, reason = check_transaction(card_number, items)
+    logger.info(f"Checkout request received | items: {items}")
+
+    results = {}
+
+    t1 = threading.Thread(target=check_fraud, args=(card_number, order_amount, results))
+    t2 = threading.Thread(target=check_transaction, args=(card_number, items, results))
+    t3 = threading.Thread(target=get_suggestions, args=(items, results))
+
+    t1.start()
+    t2.start()
+    t3.start()
+
+    t1.join()
+    t2.join()
+    t3.join()
+
+    logger.info(f"All services responded | fraud={results.get('is_fraud')} | valid={results.get('is_valid')}")
 
     # Dummy response following the provided YAML specification for the bookstore
-    if is_fraud or not is_valid:
+    if results.get('is_fraud') or not results.get('is_valid'):
         order_status_response = {
             'orderId': '12345',
             'status': 'Order Rejected',
             'suggestedBooks': []
         }
     else:
-        suggested = get_suggestions(items)
+        logger.info("Order approved")
         order_status_response = {
             'orderId': '12345',
             'status': 'Order Approved',
-            'suggestedBooks': suggested
+            'suggestedBooks': results.get('suggestions', [])
         }
 
     return order_status_response

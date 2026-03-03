@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
@@ -10,7 +11,12 @@ import suggestions_pb2_grpc as suggestions_grpc
 import grpc
 from concurrent import futures
 
-# Book catalogue with genres
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 CATALOGUE = {
     "Magical Realism": [
         {"title": "100 Years of Solitude", "author": "Gabriel García Márquez"},
@@ -39,7 +45,6 @@ CATALOGUE = {
     ],
 }
 
-# Build a flat lookup: title -> genre
 TITLE_TO_GENRE = {}
 for genre, books in CATALOGUE.items():
     for book in books:
@@ -49,14 +54,15 @@ for genre, books in CATALOGUE.items():
 class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
     def GetSuggestions(self, request, context):
         cart_titles = set(request.book_titles)
+        logger.info(f"GetSuggestions called | cart: {list(cart_titles)}")
 
-        # Find genres of books in cart
         genres = set()
         for title in cart_titles:
             if title in TITLE_TO_GENRE:
                 genres.add(TITLE_TO_GENRE[title])
 
-        # Suggest books from the same genres, excluding cart items
+        logger.info(f"Detected genres: {genres}")
+
         suggested = []
         for genre in genres:
             for book in CATALOGUE[genre]:
@@ -66,6 +72,7 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
                         author=book["author"]
                     ))
 
+        logger.info(f"Returning {len(suggested)} suggestions")
         return suggestions.SuggestionsResponse(books=suggested)
 
 
@@ -74,7 +81,7 @@ def serve():
     suggestions_grpc.add_SuggestionsServiceServicer_to_server(SuggestionsService(), server)
     server.add_insecure_port('[::]:50053')
     server.start()
-    print("Suggestions service running on port 50053")
+    logger.info("Suggestions service running on port 50053")
     server.wait_for_termination()
 
 

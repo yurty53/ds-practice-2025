@@ -12,19 +12,28 @@ import fraud_detection_pb2_grpc as fraud_detection_grpc
 
 import grpc
 from concurrent import futures
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Create a class to define the server functions, derived from
 # fraud_detection_pb2_grpc.HelloServiceServicer
 class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
     # Create an RPC function to say hello
     def SayHello(self, request, context):
-        print(f"Received request - Card: {request.card_number}, Amount: {request.order_amount}")
+        logger.info(f"Received request | card: {request.card_number} | amount: {request.order_amount}")
     
         # Flag a specific card number as fraudulent for testing
         is_fraud = request.card_number == "1234-5678-9012-3456"
     
         if is_fraud:
-            print("Fraud detected: test card number flagged")
+            logger.warning("Fraud detected: test card number flagged")
+        else:
+            logger.info("No fraud detected")
     
         response = fraud_detection.FraudResponse()
         response.is_fraud = is_fraud
@@ -37,7 +46,7 @@ def serve():
     port = "50051"
     server.add_insecure_port("[::]:" + port)
     server.start()
-    print("Fraud Detection server started. Listening on port 50051.")
+    logger.info("Fraud Detection server started. Listening on port 50051.")
     server.wait_for_termination()
 
 if __name__ == '__main__':
