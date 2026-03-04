@@ -35,7 +35,7 @@ def check_fraud(card_number, order_amount, results):
     logger.info(f"Calling fraud detection | card: {card_number} | amount: {order_amount}")
     with grpc.insecure_channel('fraud_detection:50051') as channel:
         stub = fraud_detection_grpc.FraudDetectionserviceStub(channel)
-        response = stub.SayHello(fraud_detection.FraudRequest(
+        response = stub.CheckFraud(fraud_detection.FraudRequest(
             card_number=card_number,
             order_amount=order_amount
         ))
@@ -84,11 +84,13 @@ CORS(app, resources={r'/*': {'origins': '*'}})
 def index():
     """
     Responds with 'Hello, [name]' when a GET request is made to '/' endpoint.
-    """
     # Test the fraud-detection gRPC service.
-    response = check_fraud(card_number='test', order_amount=0)
+    results = {}
+    check_fraud(card_number='test', order_amount=0, results=results)
     # Return the response.
-    return "Fraud detected: " + str(response)
+    return "Fraud detected: " + str(results.get('is_fraud'))
+    """
+    return {"status": "ok"}
 
 @app.route('/suggestions', methods=['POST'])
 def suggestions_route():

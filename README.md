@@ -2,7 +2,7 @@
 
 This repository contains the implementation of a distributed bookstore system for the Distributed Systems course at the University of Tartu.
 
-## 📚 Documentation
+## Documentation
 
 - **[Architecture](docs/ARCHITECTURE.md)** - System architecture and design
 - **[Testing Guide](docs/TESTING_GUIDE.md)** - Test scenarios

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Create a class to define the server functions, derived from
 # fraud_detection_pb2_grpc.HelloServiceServicer
 class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
-    def SayHello(self, request, context):
+    def CheckFraud(self, request, context):
         """Check if transaction is fraudulent. Test card "1234-5678-9012-3456" is flagged."""
         logger.info(f"Received request | card: {request.card_number} | amount: {request.order_amount}")
     
