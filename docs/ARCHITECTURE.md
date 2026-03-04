@@ -6,7 +6,7 @@ This distributed bookstore system implements a microservices architecture with R
 
 ## Services Architecture
 
-![Diagram of the Architecture](./Diagram.jpg)
+![Diagram of the Architecture](./Diagram.png)
 
 
 ## Communication Protocols
