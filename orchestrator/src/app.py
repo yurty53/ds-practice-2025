@@ -84,11 +84,13 @@ CORS(app, resources={r'/*': {'origins': '*'}})
 def index():
     """
     Responds with 'Hello, [name]' when a GET request is made to '/' endpoint.
-    """
     # Test the fraud-detection gRPC service.
-    response = check_fraud(card_number='test', order_amount=0)
+    results = {}
+    check_fraud(card_number='test', order_amount=0, results=results)
     # Return the response.
-    return "Fraud detected: " + str(response)
+    return "Fraud detected: " + str(results.get('is_fraud'))
+    """
+    return {"status": "ok"}
 
 @app.route('/suggestions', methods=['POST'])
 def suggestions_route():

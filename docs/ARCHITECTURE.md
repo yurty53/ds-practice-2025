@@ -24,7 +24,7 @@ This distributed bookstore system implements a microservices architecture with R
 ### gRPC Services (Orchestrator ↔ Backend)
 
 **Fraud Detection Service (Port 50051)**
-- Method: `SayHello(FraudRequest) → FraudResponse`
+- Method: `CheckFraud(FraudRequest) → FraudResponse`
 - Input: card_number, order_amount
 - Output: is_fraud (boolean)
 
