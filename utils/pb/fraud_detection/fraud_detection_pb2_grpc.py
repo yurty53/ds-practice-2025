@@ -34,8 +34,8 @@ class FraudDetectionserviceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.SayHello = channel.unary_unary(
-                '/fraud_detection.FraudDetectionservice/SayHello',
+        self.CheckFraud = channel.unary_unary(
+                '/fraud_detection.FraudDetectionservice/CheckFraud',
                 request_serializer=fraud__detection__pb2.FraudRequest.SerializeToString,
                 response_deserializer=fraud__detection__pb2.FraudResponse.FromString,
                 _registered_method=True)
@@ -44,7 +44,7 @@ class FraudDetectionserviceStub(object):
 class FraudDetectionserviceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def SayHello(self, request, context):
+    def CheckFraud(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -53,8 +53,8 @@ class FraudDetectionserviceServicer(object):
 
 def add_FraudDetectionserviceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'SayHello': grpc.unary_unary_rpc_method_handler(
-                    servicer.SayHello,
+            'CheckFraud': grpc.unary_unary_rpc_method_handler(
+                    servicer.CheckFraud,
                     request_deserializer=fraud__detection__pb2.FraudRequest.FromString,
                     response_serializer=fraud__detection__pb2.FraudResponse.SerializeToString,
             ),
@@ -70,7 +70,7 @@ class FraudDetectionservice(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def SayHello(request,
+    def CheckFraud(request,
             target,
             options=(),
             channel_credentials=None,
@@ -83,7 +83,7 @@ class FraudDetectionservice(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/fraud_detection.FraudDetectionservice/SayHello',
+            '/fraud_detection.FraudDetectionservice/CheckFraud',
             fraud__detection__pb2.FraudRequest.SerializeToString,
             fraud__detection__pb2.FraudResponse.FromString,
             options,

@@ -35,7 +35,7 @@ def check_fraud(card_number, order_amount, results):
     logger.info(f"Calling fraud detection | card: {card_number} | amount: {order_amount}")
     with grpc.insecure_channel('fraud_detection:50051') as channel:
         stub = fraud_detection_grpc.FraudDetectionserviceStub(channel)
-        response = stub.SayHello(fraud_detection.FraudRequest(
+        response = stub.CheckFraud(fraud_detection.FraudRequest(
             card_number=card_number,
             order_amount=order_amount
         ))
