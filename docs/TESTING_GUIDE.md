@@ -82,7 +82,7 @@ curl -X POST http://localhost:8081/checkout \
 **Expected Logs**:
 ```
 fraud_detection | [WARNING] Fraud detected: test card number flagged
-orchestrator    | [INFO] All services responded | fraud=True | valid=True
+orchestrator    | [INFO] All services responded | fraud=True | valid=False
 ```
 
 ---

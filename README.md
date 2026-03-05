@@ -10,7 +10,7 @@ This repository contains the implementation of a distributed bookstore system fo
 
 ## System Architecture
 
-The system consists of 4 microservices communicating via REST and gRPC protocols:
+The system consists of 5 microservices communicating via REST and gRPC protocols:
 
 ### Services Overview
 
