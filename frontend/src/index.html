@@ -72,11 +72,26 @@
         <div id="response" class="mt-6 p-4 border rounded-lg hidden"></div>
     </div>
 
+    <div id="suggestionModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+            <h2 class="text-xl font-bold mb-4">Suggestions pour vous</h2>
+            <p class="text-gray-600 mb-4 italic" id="suggestionReason"></p>
+            <ul id="suggestionList" class="space-y-2 mb-6">
+            </ul>
+            <div class="flex space-x-3">
+                <button onclick="closeSuggestions()" class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Non merci</button>
+                <button onclick="goToCheckout()" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Continuer vers le paiement</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const items = [
             { name: "Book A", quantity: 1 },
             { name: "Book B", quantity: 2 }
         ];
+
+        let selectedSuggestions = [];
 
         const itemListElement = document.getElementById('itemList');
         items.forEach(item => {
@@ -86,71 +101,111 @@
             itemListElement.appendChild(li);
         });
 
+        // ÉTAPE 1 : Intercepter le submit pour afficher les suggestions
         document.getElementById('checkoutForm').addEventListener('submit', async function(event) {
             event.preventDefault();
+            
+            // On appelle l'orchestrateur pour avoir les suggestions AVANT le checkout
+            try {
+                const response = await fetch('http://localhost:8081/suggestions', {
+                    method: 'POST',
+                    body: JSON.stringify({ items: items.map(i => i.name) }),
+                });
+                const result = await response.json();
+                
+                showSuggestions(result.suggestedBooks, result.reason);
+            } catch (error) {
+                console.error("Erreur suggestions:", error);
+                goToCheckout(); // On passe quand même au checkout si les suggestions échouent
+            }
+        });
 
-            const formData = new FormData(event.target);
+        // ÉTAPE 2 : Afficher la Pop-up
+        function showSuggestions(books, reason) {
+            const list = document.getElementById('suggestionList');
+            document.getElementById('suggestionReason').textContent = reason;
+            list.innerHTML = '';
+            
+            books.forEach((book, index) => {
+                const li = document.createElement('li');
+                li.className = "flex items-center p-2 border rounded hover:bg-blue-50 cursor-pointer";
+                li.innerHTML = `
+                    <input type="checkbox" id="sug-${index}" class="mr-3" value="${book.title}">
+                    <label for="sug-${index}" class="cursor-pointer">${book.title} <span class="text-sm text-gray-400">par ${book.author}</span></label>
+                `;
+                list.appendChild(li);
+            });
+            
+            document.getElementById('suggestionModal').classList.remove('hidden');
+        }
+
+        function closeSuggestions() {
+            document.getElementById('suggestionModal').classList.add('hidden');
+            goToCheckout();
+        }
+
+        // ÉTAPE 3 : Finaliser le Checkout
+        async function goToCheckout() {
+            document.getElementById('suggestionModal').classList.add('hidden');
+            
+            // Récupérer les suggestions cochées
+            const checkboxes = document.querySelectorAll('#suggestionList input:checked');
+            checkboxes.forEach(cb => {
+                items.push({ name: cb.value, quantity: 1 });
+            });
+
+            const formData = new FormData(document.getElementById('checkoutForm'));
             const data = {
-                user: {
-                    name: formData.get('name'),
-                    contact: formData.get('contact'),
-                },
-                creditCard: {
+                items: items.map(item => ({ name: item.name, quantity: item.quantity })), 
+                name: formData.get('name'),
+                contact: formData.get('contact'),
+                creditCard: { 
                     number: formData.get('creditCard'),
                     expirationDate: formData.get('expirationDate'),
-                    cvv: formData.get('cvv'),
+                    cvv: formData.get('cvv')
                 },
-                userComment: formData.get('userComment'),
-                items: items,
                 billingAddress: {
                     street: formData.get('billingStreet'),
                     city: formData.get('billingCity'),
                     state: formData.get('billingState'),
                     zip: formData.get('billingZip'),
-                    country: formData.get('billingCountry'),
+                    country: formData.get('billingCountry')
                 },
                 shippingMethod: formData.get('shippingMethod'),
+                userComment: formData.get('userComment'),
                 giftWrapping: formData.get('giftWrapping') === 'on',
-                termsAccepted: formData.get('terms') === 'on',
+                terms: formData.get('terms') === 'on'
             };
 
             try {
+                // Appel final à l'Orchestrateur
                 const response = await fetch('http://localhost:8081/checkout', {
                     method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
                     body: JSON.stringify(data),
                 });
-
+                
                 const result = await response.json();
+                // Afficher le résultat final (Approved/Rejected)
                 const responseDiv = document.getElementById('response');
-
-                if (response.ok) {
-                    const suggestedBooks = result.suggestedBooks.map(book => `<li>${book.title} by ${book.author}</li>`).join('');
-                    responseDiv.innerHTML = `
-                        <strong>Order status: ${result.status}</strong><br>
-                        Order ID: ${result.orderId}<br>
-                        ${result.status === "Order Approved" ?
-                            `Suggested Books:
-                            <ul class="list-disc pl-5 mt-2 space-y-1">${suggestedBooks}</ul>`
-                        : ``
-                        }
-                    `;
-                    color = result.status === 'Order Approved' ? 'green' : 'red';
-                    responseDiv.className = `mt-6 p-4 border rounded-lg bg-${color}-100 text-${color}-700`;
-                } else {
-                    responseDiv.textContent = `Error: ${result.error.message}`;
-                    responseDiv.className = "mt-6 p-4 border rounded-lg bg-red-100 text-red-700";
-                }
-
-                responseDiv.style.display = 'block';
-                // scroll to the bottom of the page
-                window.scrollTo(0, document.body.scrollHeight);
+                responseDiv.innerHTML = `
+                    <div>
+                        <h3 class="text-lg font-bold">Résultat de la commande</h3>
+                        <p><strong>Statut:</strong> ${result.status}</p>
+                        ${result.orderId ? `<p><strong>ID Commande:</strong> ${result.orderId}</p>` : ''}
+                        ${result.reason ? `<p><strong>Raison:</strong> ${result.reason}</p>` : ''}
+                    </div>
+                `;
+                responseDiv.classList.remove('hidden');
             } catch (error) {
+                console.error("Erreur checkout:", error);
                 const responseDiv = document.getElementById('response');
-                responseDiv.textContent = `Unexpected error occurred: ${error.message}`;
-                responseDiv.className = "mt-6 p-4 border rounded-lg bg-red-100 text-red-700";
-                responseDiv.style.display = 'block';
+                responseDiv.innerHTML = `<strong>Erreur: ${error.message}</strong>`;
+                responseDiv.classList.remove('hidden');
             }
-        });
+        }
     </script>
 </body>
 </html>

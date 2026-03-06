@@ -51,7 +51,13 @@ def check_suggestions(items):
         response = stub.GetSuggestions(suggestions.SuggestionsRequest(
             items=items
         ))
-    return response.suggested_books
+    suggested_list = []
+    for book in response.suggested_books:
+        suggested_list.append({
+            'title': book.title,
+            'author': book.author
+        })
+    return suggested_list, response.reason
 
 
 # Import Flask.
@@ -78,6 +84,22 @@ def index():
     # Return the response.
     return "Fraud detected: " + str(response)
 
+
+@app.route('/suggestions', methods=['POST'])
+def suggestions_route():
+
+    request_data = json.loads(request.data)
+    items = request_data.get('items', [])
+    
+    # Suggestion service call
+    suggested_books, reason = check_suggestions(items)
+    
+    return {
+        'suggestedBooks': suggested_books,
+        'reason': reason
+    }
+
+
 @app.route('/checkout', methods=['POST'])
 def checkout():
     """
@@ -96,21 +118,19 @@ def checkout():
     is_fraud = check_fraud(card_number, order_amount)
     is_valid, reason = check_transaction(card_number, items)
 
-    # response logic: if fraud or invalid transaction, reject; otherwise ask suggestions service
+    # response logic: if fraud or invalid transaction, reject; otherwise approve
     if is_fraud or not is_valid:
-        order_status_response = {
+        return {
             'orderId': '12345',
             'status': 'Order Rejected',
-            'suggestedBooks': []
-        }
+            'reason': reason if not is_valid else "Fraud detected"
+        }, 400
     else:
-        order_status_response = {
+        return {
             'orderId': '12345',
             'status': 'Order Approved',
-            'suggestedBooks': check_suggestions(items)
-        }
-
-    return order_status_response
+            'reason': 'Your order has been processed successfully'
+        }, 200
 
 
 if __name__ == '__main__':

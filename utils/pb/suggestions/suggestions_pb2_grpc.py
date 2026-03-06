@@ -25,7 +25,7 @@ if _version_not_supported:
     )
 
 
-class SuggestionsserviceStub(object):
+class SuggestionsServiceStub(object):
     """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
@@ -35,13 +35,13 @@ class SuggestionsserviceStub(object):
             channel: A grpc.Channel.
         """
         self.GetSuggestions = channel.unary_unary(
-                '/suggestions.Suggestionsservice/GetSuggestions',
+                '/suggestions.SuggestionsService/GetSuggestions',
                 request_serializer=suggestions__pb2.SuggestionsRequest.SerializeToString,
                 response_deserializer=suggestions__pb2.SuggestionsResponse.FromString,
                 _registered_method=True)
 
 
-class SuggestionsserviceServicer(object):
+class SuggestionsServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def GetSuggestions(self, request, context):
@@ -51,7 +51,7 @@ class SuggestionsserviceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
 
-def add_SuggestionsserviceServicer_to_server(servicer, server):
+def add_SuggestionsServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'GetSuggestions': grpc.unary_unary_rpc_method_handler(
                     servicer.GetSuggestions,
@@ -60,13 +60,13 @@ def add_SuggestionsserviceServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'suggestions.Suggestionsservice', rpc_method_handlers)
+            'suggestions.SuggestionsService', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('suggestions.Suggestionsservice', rpc_method_handlers)
+    server.add_registered_method_handlers('suggestions.SuggestionsService', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class Suggestionsservice(object):
+class SuggestionsService(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
@@ -83,7 +83,7 @@ class Suggestionsservice(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/suggestions.Suggestionsservice/GetSuggestions',
+            '/suggestions.SuggestionsService/GetSuggestions',
             suggestions__pb2.SuggestionsRequest.SerializeToString,
             suggestions__pb2.SuggestionsResponse.FromString,
             options,

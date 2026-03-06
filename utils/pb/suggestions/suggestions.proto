@@ -10,6 +10,12 @@ message SuggestionsRequest {
     repeated string items = 1;
 }
 
+message Book {
+    string title = 1;
+    string author = 2;
+}
+
 message SuggestionsResponse {
-    repeated string suggested_books = 1;
+    repeated Book suggested_books = 1;
+    string reason = 2;
 }

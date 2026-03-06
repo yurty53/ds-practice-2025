@@ -14,9 +14,9 @@ import grpc
 from concurrent import futures
 
 # Create a class to define the server functions, derived from
-# suggestions_pb2_grpc.SuggestionsserviceServicer (generated from .proto)
+# suggestions_pb2_grpc.SuggestionsServiceServicer (generated from .proto)
 
-class SuggestionsService(suggestions_grpc.SuggestionsserviceServicer):
+class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
     # simple in‑memory mapping from purchased product to book recommendations
     BOOK_RECOMMENDATIONS = {
         # product -> recommended titles
@@ -26,6 +26,22 @@ class SuggestionsService(suggestions_grpc.SuggestionsserviceServicer):
         # keywords that might appear in a cart item
         "python": ["Learning Python", "Fluent Python"],
         "data": ["Data Science from Scratch", "Hands-On Machine Learning"],
+    }
+
+    # Mapping of authors for each book
+    BOOK_AUTHORS = {
+        "The Pragmatic Programmer": "David Thomas & Andrew Hunt",
+        "Clean Code": "Robert C. Martin",
+        "Smartphone Photography for Beginners": "John Miller",
+        "Mobile UX Design": "Steven Hoober",
+        "Sound Engineering 101": "Tom Holman",
+        "The Musician's Guide to Acoustics": "Dave Hill",
+        "Learning Python": "Mark Lutz",
+        "Fluent Python": "Luciano Ramalho",
+        "Data Science from Scratch": "Joel Grus",
+        "Hands-On Machine Learning": "Aurélien Géron",
+        "Bestseller: A Good Read": "Anonymous",
+        "Classics for Everyone": "Classic Authors"
     }
 
     def _generate_suggestions(self, items):
@@ -53,13 +69,20 @@ class SuggestionsService(suggestions_grpc.SuggestionsserviceServicer):
     def GetSuggestions(self, request, context):
         print(f"Received request - Items: {request.items}")
         response = suggestions.SuggestionsResponse()
-        # field name changed after regeneration
-        response.suggested_books.extend(self._generate_suggestions(request.items))
+        suggested_titles = self._generate_suggestions(request.items)
+        
+        # Create Book objects with title and author
+        for title in suggested_titles:
+            book = response.suggested_books.add()
+            book.title = title
+            book.author = self.BOOK_AUTHORS.get(title, "Unknown Author")
+        
+        response.reason = f"Based on your interest in {', '.join(request.items[:2])}"
         return response
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor())
-    suggestions_grpc.add_SuggestionsserviceServicer_to_server(SuggestionsService(), server)
+    suggestions_grpc.add_SuggestionsServiceServicer_to_server(SuggestionsService(), server)
     
     port = "50053"
     server.add_insecure_port("[::]:" + port)
