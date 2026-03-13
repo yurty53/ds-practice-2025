@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package fraud_detection;
 
-service FraudDetectionService {
-    rpc DetectFraud (FraudRequest) returns (FraudResponse);
+service FraudDetectionservice {
+    rpc CheckFraud (FraudRequest) returns (FraudResponse);
 }
 
 message FraudRequest {

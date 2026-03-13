@@ -7,7 +7,7 @@ service SuggestionsService {
 }
 
 message SuggestionsRequest {
-    repeated string items = 1;
+    repeated string book_titles = 1;
 }
 
 message Book {
@@ -16,6 +16,5 @@ message Book {
 }
 
 message SuggestionsResponse {
-    repeated Book suggested_books = 1;
-    string reason = 2;
+    repeated Book books = 1;
 }

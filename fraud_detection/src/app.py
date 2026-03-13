@@ -12,33 +12,41 @@ import fraud_detection_pb2_grpc as fraud_detection_grpc
 
 import grpc
 from concurrent import futures
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Create a class to define the server functions, derived from
-# fraud_detection_pb2_grpc.FraudDetectionServiceServicer
-class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
-    # Create an RPC function to detect fraud
-    def DetectFraud(self, request, context):
-        print(f"Received request - Card: {request.card_number}, Amount: {request.order_amount}")
+# fraud_detection_pb2_grpc.FraudDetectionserviceServicer
+class FraudDetectionService(fraud_detection_grpc.FraudDetectionserviceServicer):
+    def CheckFraud(self, request, context):
+        """Check if transaction is fraudulent. Test card "1234-5678-9012-3456" is flagged."""
+        logger.info(f"Received request | card: {request.card_number} | amount: {request.order_amount}")
     
-        # Flag a specific card number as fraudulent for testing
         is_fraud = request.card_number == "1234-5678-9012-3456"
     
         if is_fraud:
-            print("Fraud detected: test card number flagged")
+            logger.warning("Fraud detected: test card number flagged")
+        else:
+            logger.info("No fraud detected")
     
         response = fraud_detection.FraudResponse()
         response.is_fraud = is_fraud
         return response
 
 def serve():
+    """Start gRPC server on port 50051."""
     server = grpc.server(futures.ThreadPoolExecutor())
-    # use regenerated helper with correct capitalization
-    fraud_detection_grpc.add_FraudDetectionServiceServicer_to_server(FraudDetectionService(), server)
+    fraud_detection_grpc.add_FraudDetectionserviceServicer_to_server(FraudDetectionService(), server)
     
     port = "50051"
     server.add_insecure_port("[::]:" + port)
     server.start()
-    print("Fraud Detection server started. Listening on port 50051.")
+    logger.info("Fraud Detection server started. Listening on port 50051.")
     server.wait_for_termination()
 
 if __name__ == '__main__':

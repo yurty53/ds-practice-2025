@@ -20,45 +20,51 @@ sys.path.insert(0, suggestions_grpc_path)
 import suggestions_pb2 as suggestions
 import suggestions_pb2_grpc as suggestions_grpc
 
-
 import grpc
+import threading
+import logging
 
-def check_fraud(card_number, order_amount):
-    # Establish a connection with the fraud-detection gRPC service.
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def check_fraud(card_number, order_amount, results):
+    """Call fraud detection gRPC service. Stores result in shared dict."""
+    logger.info(f"Calling fraud detection | card: {card_number} | amount: {order_amount}")
     with grpc.insecure_channel('fraud_detection:50051') as channel:
-        # Create a stub object.
-        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
-        # Call the service through the stub object.
-        response = stub.DetectFraud(fraud_detection.FraudRequest(
+        stub = fraud_detection_grpc.FraudDetectionserviceStub(channel)
+        response = stub.CheckFraud(fraud_detection.FraudRequest(
             card_number=card_number,
             order_amount=order_amount
         ))
-    return response.is_fraud
+    results['is_fraud'] = response.is_fraud
+    logger.info(f"Fraud detection result: is_fraud={response.is_fraud}")
 
-def check_transaction(card_number, items):
+def check_transaction(card_number, items, results):
+    """Call transaction verification gRPC service. Stores result in shared dict."""
+    logger.info(f"Calling transaction verification | card: {card_number} | items: {items}")
     with grpc.insecure_channel('transaction_verification:50052') as channel:
         stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
         response = stub.VerifyTransaction(transaction_verification.TransactionRequest(
             card_number=card_number,
             items=items
         ))
-    return response.is_valid, response.reason
+    results['is_valid'] = response.is_valid
+    results['reason'] = response.reason
+    logger.info(f"Transaction verification result: is_valid={response.is_valid} | reason={response.reason}")
 
-def check_suggestions(items):
+def get_suggestions(book_titles, results):
+    """Call suggestions gRPC service. Stores result in shared dict."""
+    logger.info(f"Calling suggestions service | titles: {book_titles}")
     with grpc.insecure_channel('suggestions:50053') as channel:
-        # create stub from generated module
         stub = suggestions_grpc.SuggestionsServiceStub(channel)
         response = stub.GetSuggestions(suggestions.SuggestionsRequest(
-            items=items
+            book_titles=book_titles
         ))
-    suggested_list = []
-    for book in response.suggested_books:
-        suggested_list.append({
-            'title': book.title,
-            'author': book.author
-        })
-    return suggested_list, response.reason
-
+    results['suggestions'] = [{'title': book.title, 'author': book.author} for book in response.books]
+    logger.info(f"Suggestions result: {results['suggestions']}")
 
 # Import Flask.
 # Flask is a web framework for Python.
@@ -78,59 +84,76 @@ CORS(app, resources={r'/*': {'origins': '*'}})
 def index():
     """
     Responds with 'Hello, [name]' when a GET request is made to '/' endpoint.
-    """
     # Test the fraud-detection gRPC service.
-    response = check_fraud(card_number='test', order_amount=0)
+    results = {}
+    check_fraud(card_number='test', order_amount=0, results=results)
     # Return the response.
-    return "Fraud detected: " + str(response)
-
+    return "Fraud detected: " + str(results.get('is_fraud'))
+    """
+    return {"status": "ok"}
 
 @app.route('/suggestions', methods=['POST'])
 def suggestions_route():
-
+    """Get book recommendations based on cart contents."""
     request_data = json.loads(request.data)
-    items = request_data.get('items', [])
-    
-    # Suggestion service call
-    suggested_books, reason = check_suggestions(items)
-    
-    return {
-        'suggestedBooks': suggested_books,
-        'reason': reason
-    }
-
+    book_titles = request_data.get('book_titles', [])
+    results = {}
+    get_suggestions(book_titles, results)
+    return {'suggestions': results.get('suggestions', [])}
 
 @app.route('/checkout', methods=['POST'])
 def checkout():
     """
-    Responds with a JSON object containing the order ID, status, and suggested books.
+    Process checkout with parallel gRPC calls.
+    
+    Uses threading to call fraud detection, transaction verification, 
+    and suggestions services concurrently for better performance.
     """
-    # Get request object data to json
     request_data = json.loads(request.data)
-    # Print request object data
-    print("Request Data:", request_data.get('items'))
+    logger.info(f"Checkout request received | items: {request_data.get('items')}")
 
-    # Call fraud detection service
     card_number = request_data.get('creditCard', {}).get('number', '')
     order_amount = sum(item.get('quantity', 1) for item in request_data.get('items', []))
     items = [item.get('name', '') for item in request_data.get('items', [])]
     
-    is_fraud = check_fraud(card_number, order_amount)
-    is_valid, reason = check_transaction(card_number, items)
+    logger.info(f"Processing checkout | card: {card_number} | items: {items}")
 
-    # response logic: if fraud or invalid transaction, reject; otherwise approve
-    if is_fraud or not is_valid:
-        return {
+    # Shared dictionary for thread results
+    results = {}
+
+    # Create threads for parallel gRPC calls
+    t1 = threading.Thread(target=check_fraud, args=(card_number, order_amount, results))
+    t2 = threading.Thread(target=check_transaction, args=(card_number, items, results))
+    t3 = threading.Thread(target=get_suggestions, args=(items, results))
+
+    # Start all threads
+    t1.start()
+    t2.start()
+    t3.start()
+
+    # Wait for all threads to complete
+    t1.join()
+    t2.join()
+    t3.join()
+
+    logger.info(f"All services responded | fraud={results.get('is_fraud')} | valid={results.get('is_valid')}")
+
+    # Reject if fraud or invalid, otherwise approve
+    if results.get('is_fraud') or not results.get('is_valid'):
+        order_status_response = {
             'orderId': '12345',
             'status': 'Order Rejected',
-            'reason': reason if not is_valid else "Fraud detected"
-        }, 400
+            'suggestedBooks': []
+        }
     else:
-        return {
+        logger.info("Order approved")
+        order_status_response = {
             'orderId': '12345',
             'status': 'Order Approved',
-            'reason': 'Your order has been processed successfully'
-        }, 200
+            'suggestedBooks': results.get('suggestions', [])
+        }
+
+    return order_status_response
 
 
 if __name__ == '__main__':

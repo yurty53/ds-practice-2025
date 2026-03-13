@@ -69,7 +69,6 @@ services:
     volumes:
       - ./utils:/app/utils
       - ./transaction_verification/src:/app/transaction_verification/src
-
   suggestions:
     build:
       context: ./
@@ -82,4 +81,3 @@ services:
     volumes:
       - ./utils:/app/utils
       - ./suggestions/src:/app/suggestions/src
-  

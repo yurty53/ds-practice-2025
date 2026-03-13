@@ -1,9 +1,7 @@
 import sys
 import os
+import logging
 
-# This set of lines are needed to import the gRPC stubs.
-# The path of the stubs is relative to the current file, or absolute inside the container.
-# Change these lines only if strictly needed.
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 suggestions_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/suggestions'))
 sys.path.insert(0, suggestions_grpc_path)
@@ -13,82 +11,88 @@ import suggestions_pb2_grpc as suggestions_grpc
 import grpc
 from concurrent import futures
 
-# Create a class to define the server functions, derived from
-# suggestions_pb2_grpc.SuggestionsServiceServicer (generated from .proto)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Book catalogue organized by genre
+CATALOGUE = {
+    "Magical Realism": [
+        {"title": "100 Years of Solitude", "author": "Gabriel García Márquez"},
+        {"title": "Feast of the Goat", "author": "Mario Vargas Llosa"},
+        {"title": "The House of Spirits", "author": "Isabel Allende"},
+    ],
+    "Classic Literature": [
+        {"title": "Brothers Karamazov", "author": "Fyodor Dostoevsky"},
+        {"title": "Les Misérables", "author": "Victor Hugo"},
+        {"title": "The Iliad", "author": "Homer"},
+    ],
+    "Fantasy": [
+        {"title": "Lord of the Rings", "author": "J.R.R. Tolkien"},
+        {"title": "The Name of the Wind", "author": "Patrick Rothfuss"},
+        {"title": "The Chronicles of Narnia", "author": "C.S. Lewis"},
+    ],
+    "Sci-Fi": [
+        {"title": "Dune", "author": "Frank Herbert"},
+        {"title": "Neuromancer", "author": "William Gibson"},
+        {"title": "Foundation", "author": "Isaac Asimov"},
+    ],
+    "Literary Fiction": [
+        {"title": "Midnight's Children", "author": "Salman Rushdie"},
+        {"title": "God of Small Things", "author": "Arundhati Roy"},
+        {"title": "The Grapes of Wrath", "author": "John Steinbeck"},
+    ],
+}
+
+# Build reverse mapping for O(1) genre lookup
+TITLE_TO_GENRE = {}
+for genre, books in CATALOGUE.items():
+    for book in books:
+        TITLE_TO_GENRE[book["title"]] = genre
+
 
 class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
-    # simple in‑memory mapping from purchased product to book recommendations
-    BOOK_RECOMMENDATIONS = {
-        # product -> recommended titles
-        "laptop": ["The Pragmatic Programmer", "Clean Code"],
-        "smartphone": ["Smartphone Photography for Beginners", "Mobile UX Design"],
-        "headphones": ["Sound Engineering 101", "The Musician's Guide to Acoustics"],
-        # keywords that might appear in a cart item
-        "python": ["Learning Python", "Fluent Python"],
-        "data": ["Data Science from Scratch", "Hands-On Machine Learning"],
-    }
-
-    # Mapping of authors for each book
-    BOOK_AUTHORS = {
-        "The Pragmatic Programmer": "David Thomas & Andrew Hunt",
-        "Clean Code": "Robert C. Martin",
-        "Smartphone Photography for Beginners": "John Miller",
-        "Mobile UX Design": "Steven Hoober",
-        "Sound Engineering 101": "Tom Holman",
-        "The Musician's Guide to Acoustics": "Dave Hill",
-        "Learning Python": "Mark Lutz",
-        "Fluent Python": "Luciano Ramalho",
-        "Data Science from Scratch": "Joel Grus",
-        "Hands-On Machine Learning": "Aurélien Géron",
-        "Bestseller: A Good Read": "Anonymous",
-        "Classics for Everyone": "Classic Authors"
-    }
-
-    def _generate_suggestions(self, items):
-        
-        suggestions_set = set()
-
-        for raw in items:
-            token = raw.strip().lower()
-            # try exact match or look for keyword substrings
-            if token in self.BOOK_RECOMMENDATIONS:
-                suggestions_set.update(self.BOOK_RECOMMENDATIONS[token])
-            else:
-                for key, titles in self.BOOK_RECOMMENDATIONS.items():
-                    if key in token:
-                        suggestions_set.update(titles)
-
-        # if we didn't find anything, return a few generic bestsellers
-        if not suggestions_set:
-            suggestions_set.update(["Bestseller: A Good Read", "Classics for Everyone"])
-
-        # limit to three suggestions to keep response small
-        return list(suggestions_set)[:3]
-
-    # Create an RPC function to suggest
     def GetSuggestions(self, request, context):
-        print(f"Received request - Items: {request.items}")
-        response = suggestions.SuggestionsResponse()
-        suggested_titles = self._generate_suggestions(request.items)
-        
-        # Create Book objects with title and author
-        for title in suggested_titles:
-            book = response.suggested_books.add()
-            book.title = title
-            book.author = self.BOOK_AUTHORS.get(title, "Unknown Author")
-        
-        response.reason = f"Based on your interest in {', '.join(request.items[:2])}"
-        return response
+        """
+        Get book recommendations based on cart contents.
+        Algorithm: find genres of cart books, suggest other books from same genres.
+        """
+        cart_titles = set(request.book_titles)
+        logger.info(f"GetSuggestions called | cart: {list(cart_titles)}")
+
+        # Identify genres of books in cart
+        genres = set()
+        for title in cart_titles:
+            if title in TITLE_TO_GENRE:
+                genres.add(TITLE_TO_GENRE[title])
+
+        logger.info(f"Detected genres: {genres}")
+
+        # Find suggestions from same genres, excluding cart items
+        suggested = []
+        for genre in genres:
+            for book in CATALOGUE[genre]:
+                if book["title"] not in cart_titles:
+                    suggested.append(suggestions.Book(
+                        title=book["title"],
+                        author=book["author"]
+                    ))
+
+        logger.info(f"Returning {len(suggested)} suggestions")
+        return suggestions.SuggestionsResponse(books=suggested)
+
 
 def serve():
-    server = grpc.server(futures.ThreadPoolExecutor())
+    """Start gRPC server on port 50053."""
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     suggestions_grpc.add_SuggestionsServiceServicer_to_server(SuggestionsService(), server)
-    
-    port = "50053"
-    server.add_insecure_port("[::]:" + port)
+    server.add_insecure_port('[::]:50053')
     server.start()
-    print("Suggestions server started. Listening on port 50053.")
+    logger.info("Suggestions service running on port 50053")
     server.wait_for_termination()
+
 
 if __name__ == '__main__':
     serve()

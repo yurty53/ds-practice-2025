@@ -3,209 +3,235 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Checkout Page</title>
+    <title>Browse Books</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-gray-100 min-h-screen flex items-center justify-center overflow-y-auto">
-    <div class="w-full max-w-2xl bg-white p-6 rounded-lg shadow-md">
-        <form id="checkoutForm">
-            <h1 class="text-2xl font-bold text-center text-gray-800 mb-6">Checkout Page</h1>
+<body class="bg-gray-100 min-h-screen">
 
-            <div class="mb-6">
-                <h2 class="text-lg font-semibold text-gray-700">Items</h2>
-                <ul id="itemList" class="list-none p-0 mt-2 space-y-2">
-                    <!-- Items will be dynamically rendered here -->
-                </ul>
-            </div>
+    <div class="max-w-6xl mx-auto px-4 py-8 flex gap-6 items-start">
 
-            <div class="mb-4">
-                <label for="name" class="block text-sm font-medium text-gray-700">Name:</label>
-                <input type="text" id="name" name="name" value="John Doe" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-            </div>
-            <div class="mb-4">
-                <label for="contact" class="block text-sm font-medium text-gray-700">Contact:</label>
-                <input type="email" id="contact" name="contact" value="john.doe@example.com" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-            </div>
-            <div class="mb-4">
-                <label for="creditCard" class="block text-sm font-medium text-gray-700">Credit Card Number:</label>
-                <input type="text" id="creditCard" name="creditCard" value="4111-1111-1111-1111" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-            </div>
-            <div class="mb-4">
-                <label for="expirationDate" class="block text-sm font-medium text-gray-700">Expiration Date:</label>
-                <input type="text" id="expirationDate" name="expirationDate" value="12/25" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-            </div>
-            <div class="mb-4">
-                <label for="cvv" class="block text-sm font-medium text-gray-700">CVV:</label>
-                <input type="text" id="cvv" name="cvv" value="123" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-            </div>
-            <div class="mb-4">
-                <label for="userComment" class="block text-sm font-medium text-gray-700">Comment:</label>
-                <textarea id="userComment" name="userComment" class="w-full border border-gray-300 rounded-lg p-2 mt-1">Please handle with care.</textarea>
-            </div>
-            <div class="mb-4">
-                <label for="billingAddress" class="block text-sm font-medium text-gray-700">Billing Address:</label>
-                <input type="text" id="billingStreet" name="billingStreet" value="123 Main St" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-                <input type="text" id="billingCity" name="billingCity" value="Springfield" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-                <input type="text" id="billingState" name="billingState" value="IL" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-                <input type="text" id="billingZip" name="billingZip" value="62701" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-                <input type="text" id="billingCountry" name="billingCountry" value="USA" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-            </div>
-            <div class="mb-4">
-                <label for="shippingMethod" class="block text-sm font-medium text-gray-700">Shipping Method:</label>
-                <select id="shippingMethod" name="shippingMethod" required class="w-full border border-gray-300 rounded-lg p-2 mt-1">
-                    <option value="Standard" selected>Standard</option>
-                    <option value="Express">Express</option>
-                    <option value="Next-Day">Next-Day</option>
-                </select>
-            </div>
-            <div class="mb-4 flex items-center">
-                <input type="checkbox" id="giftWrapping" name="giftWrapping" checked class="mr-2 border border-gray-300 rounded">
-                <label for="giftWrapping" class="text-sm font-medium text-gray-700">Gift Wrapping</label>
-            </div>
-            <div class="mb-4 flex items-center">
-                <input type="checkbox" id="terms" name="terms" checked required class="mr-2 border border-gray-300 rounded">
-                <label for="terms" class="text-sm font-medium text-gray-700">Accept Terms and Conditions</label>
-            </div>
-            <button type="submit" class="w-full bg-blue-600 text-white font-medium py-2 px-4 rounded-lg hover:bg-blue-700">Submit Order</button>
-        </form>
+        <!-- LEFT: Scrollable Book Catalogue -->
+        <div class="w-7/12 bg-white p-6 rounded-lg shadow-md">
+            <h1 class="text-2xl font-bold text-center text-gray-800 mb-2">Browse Books</h1>
+            <p class="text-center text-sm text-gray-500 mb-6">Select books to add to your cart.</p>
+            <div id="catalogue"></div>
+        </div>
 
-        <div id="response" class="mt-6 p-4 border rounded-lg hidden"></div>
-    </div>
+        <!-- RIGHT: Fixed Sidebar -->
+        <div class="w-5/12 flex-shrink-0">
+            <div class="sticky top-8 flex flex-col gap-4">
 
-    <div id="suggestionModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
-            <h2 class="text-xl font-bold mb-4">Suggestions pour vous</h2>
-            <p class="text-gray-600 mb-4 italic" id="suggestionReason"></p>
-            <ul id="suggestionList" class="space-y-2 mb-6">
-            </ul>
-            <div class="flex space-x-3">
-                <button onclick="closeSuggestions()" class="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">Non merci</button>
-                <button onclick="goToCheckout()" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Continuer vers le paiement</button>
+                <!-- Cart Summary -->
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider mb-3">Your Cart</h2>
+                    <div id="cart-empty" class="text-sm text-gray-400 italic">No books added yet.</div>
+                    <ul id="cart-list" class="space-y-1 hidden"></ul>
+                    <button id="checkout-btn" onclick="proceedToCheckout()"
+                        class="mt-4 w-full bg-blue-600 text-white font-medium py-2 px-4 rounded-lg hover:bg-blue-700 text-sm hidden">
+                        Proceed to Checkout →
+                    </button>
+                </div>
+
+                <!-- Suggestions -->
+                <div class="bg-white rounded-lg shadow-md p-4">
+                    <h2 class="text-sm font-bold text-gray-700 uppercase tracking-wider mb-1">Suggested For You</h2>
+                    <p class="text-xs text-gray-400 mb-3">Based on your selections</p>
+                    <div id="suggestions-empty" class="text-sm text-gray-400 italic">Add a book to get suggestions.</div>
+                    <ul id="suggestions-list" class="space-y-2 hidden"></ul>
+                </div>
+
             </div>
         </div>
+
     </div>
 
     <script>
-        const items = [
-            { name: "Book A", quantity: 1 },
-            { name: "Book B", quantity: 2 }
-        ];
+        const CATALOGUE = {
+            "Magical Realism": [
+                { title: "100 Years of Solitude", author: "Gabriel García Márquez" },
+                { title: "Feast of the Goat", author: "Mario Vargas Llosa" },
+                { title: "The House of Spirits", author: "Isabel Allende" },
+            ],
+            "Classic Literature": [
+                { title: "Brothers Karamazov", author: "Fyodor Dostoevsky" },
+                { title: "Les Misérables", author: "Victor Hugo" },
+                { title: "The Iliad", author: "Homer" },
+            ],
+            "Fantasy": [
+                { title: "Lord of the Rings", author: "J.R.R. Tolkien" },
+                { title: "The Name of the Wind", author: "Patrick Rothfuss" },
+                { title: "The Chronicles of Narnia", author: "C.S. Lewis" },
+            ],
+            "Sci-Fi": [
+                { title: "Dune", author: "Frank Herbert" },
+                { title: "Neuromancer", author: "William Gibson" },
+                { title: "Foundation", author: "Isaac Asimov" },
+            ],
+            "Literary Fiction": [
+                { title: "Midnight's Children", author: "Salman Rushdie" },
+                { title: "God of Small Things", author: "Arundhati Roy" },
+                { title: "The Grapes of Wrath", author: "John Steinbeck" },
+            ],
+        };
 
-        let selectedSuggestions = [];
+        let cart = [];
 
-        const itemListElement = document.getElementById('itemList');
-        items.forEach(item => {
-            const li = document.createElement('li');
-            li.textContent = `${item.name} - Quantity: ${item.quantity}`;
-            li.className = "bg-gray-100 p-3 rounded-lg";
-            itemListElement.appendChild(li);
-        });
+        function renderCatalogue() {
+            const container = document.getElementById('catalogue');
+            for (const [genre, books] of Object.entries(CATALOGUE)) {
+                const section = document.createElement('div');
+                section.className = 'mb-6';
+                section.innerHTML = `<h2 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-2">${genre}</h2><ul class="space-y-2"></ul>`;
+                const ul = section.querySelector('ul');
+                books.forEach(book => {
+                    const idSlug = book.title.replace(/\s+/g, '-');
+                    const li = document.createElement('li');
+                    li.className = 'flex justify-between items-center bg-gray-100 p-3 rounded-lg';
+                    li.id = `book-${idSlug}`;
+                    li.innerHTML = `
+                        <div>
+                            <span class="font-medium text-gray-800 text-sm">${book.title}</span>
+                            <span class="text-xs text-gray-500 ml-2">— ${book.author}</span>
+                        </div>
+                        <button class="text-sm bg-white border border-gray-300 text-gray-700 px-3 py-1 rounded hover:bg-blue-50 hover:border-blue-400 hover:text-blue-600 transition-colors flex-shrink-0 ml-2">
+                            + Add
+                        </button>
+                    `;
+                    li.querySelector('button').addEventListener('click', function() {
+                        toggleCart(book.title, book.author);
+                    });
+                    ul.appendChild(li);
+                });
+                container.appendChild(section);
+            }
+        }
 
-        // ÉTAPE 1 : Intercepter le submit pour afficher les suggestions
-        document.getElementById('checkoutForm').addEventListener('submit', async function(event) {
-            event.preventDefault();
-            
-            // On appelle l'orchestrateur pour avoir les suggestions AVANT le checkout
+        function toggleCart(title, author) {
+            const inCart = cart.find(b => b.title === title);
+            if (inCart) {
+                cart = cart.filter(b => b.title !== title);
+            } else {
+                cart.push({ title, author, quantity: 1 });
+            }
+            updateCatalogueStates();
+            updateCartSidebar();
+            fetchSuggestions();
+        }
+
+        function updateCatalogueStates() {
+            for (const [genre, books] of Object.entries(CATALOGUE)) {
+                books.forEach(book => {
+                    const row = document.getElementById(`book-${book.title.replace(/\s+/g, '-')}`);
+                    if (!row) return;
+                    const btn = row.querySelector('button');
+                    const inCart = cart.find(b => b.title === book.title);
+                    if (inCart) {
+                        btn.textContent = '✓ Added';
+                        btn.className = 'text-sm bg-blue-600 border border-blue-600 text-white px-3 py-1 rounded flex-shrink-0 ml-2';
+                        row.classList.remove('bg-gray-100');
+                        row.classList.add('bg-blue-50');
+                    } else {
+                        btn.textContent = '+ Add';
+                        btn.className = 'text-sm bg-white border border-gray-300 text-gray-700 px-3 py-1 rounded hover:bg-blue-50 hover:border-blue-400 hover:text-blue-600 transition-colors flex-shrink-0 ml-2';
+                        row.classList.remove('bg-blue-50');
+                        row.classList.add('bg-gray-100');
+                    }
+                });
+            }
+        }
+
+        function updateCartSidebar() {
+            const emptyMsg = document.getElementById('cart-empty');
+            const cartList = document.getElementById('cart-list');
+            const checkoutBtn = document.getElementById('checkout-btn');
+
+            if (cart.length === 0) {
+                emptyMsg.classList.remove('hidden');
+                cartList.classList.add('hidden');
+                checkoutBtn.classList.add('hidden');
+                cartList.innerHTML = '';
+            } else {
+                emptyMsg.classList.add('hidden');
+                cartList.classList.remove('hidden');
+                checkoutBtn.classList.remove('hidden');
+                cartList.innerHTML = cart.map(b =>
+                    `<li class="text-sm text-gray-700 flex items-start gap-1">
+                        <span class="text-blue-500 mt-0.5">•</span>
+                        <span>${b.title}</span>
+                    </li>`
+                ).join('');
+            }
+        }
+
+        async function fetchSuggestions() {
+            const emptyMsg = document.getElementById('suggestions-empty');
+            const list = document.getElementById('suggestions-list');
+
+            if (cart.length === 0) {
+                emptyMsg.textContent = 'Add a book to get suggestions.';
+                emptyMsg.classList.remove('hidden');
+                list.classList.add('hidden');
+                list.innerHTML = '';
+                return;
+            }
+
             try {
                 const response = await fetch('http://localhost:8081/suggestions', {
                     method: 'POST',
-                    body: JSON.stringify({ items: items.map(i => i.name) }),
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ book_titles: cart.map(b => b.title) })
                 });
+
                 const result = await response.json();
-                
-                showSuggestions(result.suggestedBooks, result.reason);
-            } catch (error) {
-                console.error("Erreur suggestions:", error);
-                goToCheckout(); // On passe quand même au checkout si les suggestions échouent
-            }
-        });
+                const suggestions = result.suggestions || [];
 
-        // ÉTAPE 2 : Afficher la Pop-up
-        function showSuggestions(books, reason) {
-            const list = document.getElementById('suggestionList');
-            document.getElementById('suggestionReason').textContent = reason;
-            list.innerHTML = '';
-            
-            books.forEach((book, index) => {
-                const li = document.createElement('li');
-                li.className = "flex items-center p-2 border rounded hover:bg-blue-50 cursor-pointer";
-                li.innerHTML = `
-                    <input type="checkbox" id="sug-${index}" class="mr-3" value="${book.title}">
-                    <label for="sug-${index}" class="cursor-pointer">${book.title} <span class="text-sm text-gray-400">par ${book.author}</span></label>
-                `;
-                list.appendChild(li);
-            });
-            
-            document.getElementById('suggestionModal').classList.remove('hidden');
-        }
+                list.innerHTML = '';
 
-        function closeSuggestions() {
-            document.getElementById('suggestionModal').classList.add('hidden');
-            goToCheckout();
-        }
+                if (suggestions.length === 0) {
+                    emptyMsg.textContent = 'You\'ve covered all the genres!';
+                    emptyMsg.classList.remove('hidden');
+                    list.classList.add('hidden');
+                } else {
+                    emptyMsg.classList.add('hidden');
+                    list.classList.remove('hidden');
+                    suggestions.forEach(book => {
+                        const inCart = cart.find(b => b.title === book.title);
+                        const li = document.createElement('li');
+                        li.className = `flex justify-between items-center p-2 rounded-lg ${inCart ? 'bg-blue-50' : 'bg-gray-100'}`;
+                        li.innerHTML = `
+                            <div class="flex-1 min-w-0 mr-2">
+                                <div class="text-sm font-medium text-gray-800 truncate">${book.title}</div>
+                                <div class="text-xs text-gray-500 truncate">${book.author}</div>
+                            </div>
+                            <button class="text-xs flex-shrink-0 ${inCart ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-300 text-gray-700 hover:bg-blue-50 hover:border-blue-400 hover:text-blue-600'} border px-2 py-1 rounded transition-colors">
+                                ${inCart ? '✓' : '+ Add'}
+                            </button>
+                        `;
+                        li.querySelector('button').addEventListener('click', function() {
+                            toggleCart(book.title, book.author);
+                        });
+                        list.appendChild(li);
+                    });
+                }
 
-        // ÉTAPE 3 : Finaliser le Checkout
-        async function goToCheckout() {
-            document.getElementById('suggestionModal').classList.add('hidden');
-            
-            // Récupérer les suggestions cochées
-            const checkboxes = document.querySelectorAll('#suggestionList input:checked');
-            checkboxes.forEach(cb => {
-                items.push({ name: cb.value, quantity: 1 });
-            });
-
-            const formData = new FormData(document.getElementById('checkoutForm'));
-            const data = {
-                items: items.map(item => ({ name: item.name, quantity: item.quantity })), 
-                name: formData.get('name'),
-                contact: formData.get('contact'),
-                creditCard: { 
-                    number: formData.get('creditCard'),
-                    expirationDate: formData.get('expirationDate'),
-                    cvv: formData.get('cvv')
-                },
-                billingAddress: {
-                    street: formData.get('billingStreet'),
-                    city: formData.get('billingCity'),
-                    state: formData.get('billingState'),
-                    zip: formData.get('billingZip'),
-                    country: formData.get('billingCountry')
-                },
-                shippingMethod: formData.get('shippingMethod'),
-                userComment: formData.get('userComment'),
-                giftWrapping: formData.get('giftWrapping') === 'on',
-                terms: formData.get('terms') === 'on'
-            };
-
-            try {
-                // Appel final à l'Orchestrateur
-                const response = await fetch('http://localhost:8081/checkout', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(data),
-                });
-                
-                const result = await response.json();
-                // Afficher le résultat final (Approved/Rejected)
-                const responseDiv = document.getElementById('response');
-                responseDiv.innerHTML = `
-                    <div>
-                        <h3 class="text-lg font-bold">Résultat de la commande</h3>
-                        <p><strong>Statut:</strong> ${result.status}</p>
-                        ${result.orderId ? `<p><strong>ID Commande:</strong> ${result.orderId}</p>` : ''}
-                        ${result.reason ? `<p><strong>Raison:</strong> ${result.reason}</p>` : ''}
-                    </div>
-                `;
-                responseDiv.classList.remove('hidden');
-            } catch (error) {
-                console.error("Erreur checkout:", error);
-                const responseDiv = document.getElementById('response');
-                responseDiv.innerHTML = `<strong>Erreur: ${error.message}</strong>`;
-                responseDiv.classList.remove('hidden');
+            } catch (err) {
+                emptyMsg.textContent = 'Could not load suggestions.';
+                emptyMsg.classList.remove('hidden');
+                list.classList.add('hidden');
+                console.error('Could not fetch suggestions:', err);
             }
         }
+
+        function proceedToCheckout() {
+            if (cart.length === 0) {
+                alert('Please add at least one book to your cart.');
+                return;
+            }
+            localStorage.setItem('cart', JSON.stringify(cart));
+            window.location.href = '/checkout.html';
+        }
+
+        renderCatalogue();
     </script>
 </body>
 </html>
