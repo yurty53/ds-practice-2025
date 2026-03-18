@@ -1,5 +1,6 @@
 import sys
 import os
+import uuid
 
 # This set of lines are needed to import the gRPC stubs.
 # The path of the stubs is relative to the current file, or absolute inside the container.
@@ -30,18 +31,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def check_fraud(card_number, order_amount, results):
-    """Call fraud detection gRPC service. Stores result in shared dict."""
-    logger.info(f"Calling fraud detection | card: {card_number} | amount: {order_amount}")
-    with grpc.insecure_channel('fraud_detection:50051') as channel:
-        stub = fraud_detection_grpc.FraudDetectionserviceStub(channel)
-        response = stub.CheckFraud(fraud_detection.FraudRequest(
-            card_number=card_number,
-            order_amount=order_amount
-        ))
-    results['is_fraud'] = response.is_fraud
-    logger.info(f"Fraud detection result: is_fraud={response.is_fraud}")
+def run_fraud_detection(request_data, results):
+    """Call fraud detection InitOrder then CheckUserFraud and CheckCreditCardFraud in sequence."""
+    order_id = str(uuid.uuid4())
+    user_name = request_data.get('user', {}).get('name', '')
+    user_contact = request_data.get('user', {}).get('contact', '')
+    card_number = request_data.get('creditCard', {}).get('number', '')
+    expiration_date = request_data.get('creditCard', {}).get('expirationDate', '')
 
+    with grpc.insecure_channel('fraud_detection:50051') as channel:
+        stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
+
+        # Init
+        stub.InitOrder(fraud_detection.InitOrderRequest(
+            order_id=order_id,
+            user_name=user_name,
+            user_contact=user_contact,
+            card_number=card_number,
+            expiration_date=expiration_date,
+        ))
+        logger.info(f"[{order_id}] InitOrder complete")
+
+        # Event d
+        vc = {}
+        resp_d = stub.CheckUserFraud(fraud_detection.UserFraudRequest(
+            order_id=order_id,
+            vector_clock=vc
+        ))
+        logger.info(f"[{order_id}] CheckUserFraud: is_fraud={resp_d.is_fraud} | VC={dict(resp_d.vector_clock)}")
+        if resp_d.is_fraud:
+            results['is_fraud'] = True
+            results['fraud_reason'] = resp_d.reason
+            return
+
+        # Event e
+        resp_e = stub.CheckCreditCardFraud(fraud_detection.CardFraudRequest(
+            order_id=order_id,
+            vector_clock=dict(resp_d.vector_clock)
+        ))
+        logger.info(f"[{order_id}] CheckCreditCardFraud: is_fraud={resp_e.is_fraud} | VC={dict(resp_e.vector_clock)}")
+        results['is_fraud'] = resp_e.is_fraud
+        results['fraud_reason'] = resp_e.reason
+        
 def check_transaction(card_number, items, results):
     """Call transaction verification gRPC service. Stores result in shared dict."""
     logger.info(f"Calling transaction verification | card: {card_number} | items: {items}")
@@ -112,17 +143,18 @@ def checkout():
     request_data = json.loads(request.data)
     logger.info(f"Checkout request received | items: {request_data.get('items')}")
 
-    card_number = request_data.get('creditCard', {}).get('number', '')
-    order_amount = sum(item.get('quantity', 1) for item in request_data.get('items', []))
+    
     items = [item.get('name', '') for item in request_data.get('items', [])]
     
-    logger.info(f"Processing checkout | card: {card_number} | items: {items}")
+    items = [item.get('name', '') for item in request_data.get('items', [])]
+    card_number = request_data.get('creditCard', {}).get('number', '')
+    logger.info(f"Processing checkout | items: {items}")
 
     # Shared dictionary for thread results
     results = {}
 
     # Create threads for parallel gRPC calls
-    t1 = threading.Thread(target=check_fraud, args=(card_number, order_amount, results))
+    t1 = threading.Thread(target=run_fraud_detection, args=(request_data, results))
     t2 = threading.Thread(target=check_transaction, args=(card_number, items, results))
     t3 = threading.Thread(target=get_suggestions, args=(items, results))
 

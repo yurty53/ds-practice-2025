@@ -1,16 +1,36 @@
 syntax = "proto3";
-
 package fraud_detection;
 
-service FraudDetectionservice {
-    rpc CheckFraud (FraudRequest) returns (FraudResponse);
+service FraudDetectionService {
+    rpc InitOrder (InitOrderRequest) returns (InitOrderResponse);
+    rpc CheckUserFraud (UserFraudRequest) returns (FraudEventResponse);
+    rpc CheckCreditCardFraud (CardFraudRequest) returns (FraudEventResponse);
 }
 
-message FraudRequest {
-    string card_number = 1;
-    float order_amount = 2;
+message InitOrderRequest {
+    string order_id = 1;
+    string user_name = 2;
+    string user_contact = 3;
+    string card_number = 4;
+    string expiration_date = 5;
 }
 
-message FraudResponse {
+message InitOrderResponse {
+    bool success = 1;
+}
+
+message UserFraudRequest {
+    string order_id = 1;
+    map<string, int32> vector_clock = 2;
+}
+
+message CardFraudRequest {
+    string order_id = 1;
+    map<string, int32> vector_clock = 2;
+}
+
+message FraudEventResponse {
     bool is_fraud = 1;
+    string reason = 2;
+    map<string, int32> vector_clock = 3;
 }
