@@ -18,7 +18,7 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + f' but the generated code in transaction_verification/transaction_verification_pb2_grpc.py depends on'
+        + f' but the generated code in transaction_verification_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
@@ -34,17 +34,39 @@ class TransactionVerificationServiceStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.VerifyTransaction = channel.unary_unary(
-                '/transaction_verification.TransactionVerificationService/VerifyTransaction',
-                request_serializer=transaction__verification__pb2.TransactionRequest.SerializeToString,
-                response_deserializer=transaction__verification__pb2.TransactionResponse.FromString,
+        self.VerifyItems = channel.unary_unary(
+                '/transaction_verification.TransactionVerificationService/VerifyItems',
+                request_serializer=transaction__verification__pb2.VerifyItemsRequest.SerializeToString,
+                response_deserializer=transaction__verification__pb2.VerifyResponse.FromString,
+                _registered_method=True)
+        self.VerifyUserData = channel.unary_unary(
+                '/transaction_verification.TransactionVerificationService/VerifyUserData',
+                request_serializer=transaction__verification__pb2.VerifyUserDataRequest.SerializeToString,
+                response_deserializer=transaction__verification__pb2.VerifyResponse.FromString,
+                _registered_method=True)
+        self.VerifyCreditCard = channel.unary_unary(
+                '/transaction_verification.TransactionVerificationService/VerifyCreditCard',
+                request_serializer=transaction__verification__pb2.VerifyCreditCardRequest.SerializeToString,
+                response_deserializer=transaction__verification__pb2.VerifyResponse.FromString,
                 _registered_method=True)
 
 
 class TransactionVerificationServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def VerifyTransaction(self, request, context):
+    def VerifyItems(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def VerifyUserData(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def VerifyCreditCard(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -53,10 +75,20 @@ class TransactionVerificationServiceServicer(object):
 
 def add_TransactionVerificationServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'VerifyTransaction': grpc.unary_unary_rpc_method_handler(
-                    servicer.VerifyTransaction,
-                    request_deserializer=transaction__verification__pb2.TransactionRequest.FromString,
-                    response_serializer=transaction__verification__pb2.TransactionResponse.SerializeToString,
+            'VerifyItems': grpc.unary_unary_rpc_method_handler(
+                    servicer.VerifyItems,
+                    request_deserializer=transaction__verification__pb2.VerifyItemsRequest.FromString,
+                    response_serializer=transaction__verification__pb2.VerifyResponse.SerializeToString,
+            ),
+            'VerifyUserData': grpc.unary_unary_rpc_method_handler(
+                    servicer.VerifyUserData,
+                    request_deserializer=transaction__verification__pb2.VerifyUserDataRequest.FromString,
+                    response_serializer=transaction__verification__pb2.VerifyResponse.SerializeToString,
+            ),
+            'VerifyCreditCard': grpc.unary_unary_rpc_method_handler(
+                    servicer.VerifyCreditCard,
+                    request_deserializer=transaction__verification__pb2.VerifyCreditCardRequest.FromString,
+                    response_serializer=transaction__verification__pb2.VerifyResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -70,7 +102,7 @@ class TransactionVerificationService(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def VerifyTransaction(request,
+    def VerifyItems(request,
             target,
             options=(),
             channel_credentials=None,
@@ -83,9 +115,63 @@ class TransactionVerificationService(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/transaction_verification.TransactionVerificationService/VerifyTransaction',
-            transaction__verification__pb2.TransactionRequest.SerializeToString,
-            transaction__verification__pb2.TransactionResponse.FromString,
+            '/transaction_verification.TransactionVerificationService/VerifyItems',
+            transaction__verification__pb2.VerifyItemsRequest.SerializeToString,
+            transaction__verification__pb2.VerifyResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def VerifyUserData(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/transaction_verification.TransactionVerificationService/VerifyUserData',
+            transaction__verification__pb2.VerifyUserDataRequest.SerializeToString,
+            transaction__verification__pb2.VerifyResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def VerifyCreditCard(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/transaction_verification.TransactionVerificationService/VerifyCreditCard',
+            transaction__verification__pb2.VerifyCreditCardRequest.SerializeToString,
+            transaction__verification__pb2.VerifyResponse.FromString,
             options,
             channel_credentials,
             insecure,

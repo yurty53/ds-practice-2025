@@ -3,15 +3,32 @@ syntax = "proto3";
 package transaction_verification;
 
 service TransactionVerificationService {
-    rpc VerifyTransaction (TransactionRequest) returns (TransactionResponse);
+    rpc VerifyItems (VerifyItemsRequest) returns (VerifyResponse);
+    rpc VerifyUserData (VerifyUserDataRequest) returns (VerifyResponse);
+    rpc VerifyCreditCard (VerifyCreditCardRequest) returns (VerifyResponse);
 }
 
-message TransactionRequest {
-    string card_number = 1;
-    repeated string items = 2;
+message VerifyItemsRequest {
+    repeated string items = 1;
 }
 
-message TransactionResponse {
-    bool is_valid = 1;
-    string reason = 2;
+message VerifyUserDataRequest {
+    string name    = 1;
+    string contact = 2;
+    string street  = 3;
+    string city    = 4;
+    string state   = 5;
+    string zip     = 6;
+    string country = 7;
+}
+
+message VerifyCreditCardRequest {
+    string number          = 1;
+    string expiration_date = 2;
+    string cvv             = 3;
+}
+
+message VerifyResponse {
+    bool   is_valid = 1;
+    string reason   = 2;
 }

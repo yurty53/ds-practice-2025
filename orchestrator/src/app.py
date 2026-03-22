@@ -73,18 +73,71 @@ def run_fraud_detection(request_data, results):
         results['is_fraud'] = resp_e.is_fraud
         results['fraud_reason'] = resp_e.reason
         
-def check_transaction(card_number, items, results):
-    """Call transaction verification gRPC service. Stores result in shared dict."""
-    logger.info(f"Calling transaction verification | card: {card_number} | items: {items}")
+def check_transaction(items, user, billing_address, credit_card, results):
+    """
+    Call transaction verification gRPC service.
+    Executes 3 sequential RPC calls, each representing a distinct event
+    to support vector clock ordering in future implementations.
+ 
+    Event 1 — VerifyItems:      items list is not empty
+    Event 2 — VerifyUserData:   mandatory user fields are present and valid
+    Event 3 — VerifyCreditCard: credit card format is correct
+    """
+    
+    logger.info(f"Calling transaction verification | card: {credit_card.get('number')} | items: {items}")
+
     with grpc.insecure_channel('transaction_verification:50052') as channel:
         stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
-        response = stub.VerifyTransaction(transaction_verification.TransactionRequest(
-            card_number=card_number,
-            items=items
-        ))
-    results['is_valid'] = response.is_valid
-    results['reason'] = response.reason
-    logger.info(f"Transaction verification result: is_valid={response.is_valid} | reason={response.reason}")
+
+        # ------------------------------Event a: Verify Items------------------------------------
+        logger.info("Transaction verification | Event a: VerifyItems")
+        resp1 = stub.VerifyItems(
+            transaction_verification.VerifyItemsRequest(items=items)
+        )
+        if not resp1.is_valid:
+            logger.warning(f"Transaction verification failed at Event a: {resp1.reason}")
+            results['is_valid'] = False
+            results['reason']   = resp1.reason
+            return
+ 
+        # ------------------------------Event b: Verify User Data------------------------------------
+        logger.info("Transaction verification | Event b: VerifyUserData")
+        resp2 = stub.VerifyUserData(
+            transaction_verification.VerifyUserDataRequest(
+                name    = user.get('name', ''),
+                contact = user.get('contact', ''),
+                street  = billing_address.get('street', ''),
+                city    = billing_address.get('city', ''),
+                state   = billing_address.get('state', ''),
+                zip     = billing_address.get('zip', ''),
+                country = billing_address.get('country', ''),
+            )
+        )
+        if not resp2.is_valid:
+            logger.warning(f"Transaction verification failed at Event b: {resp2.reason}")
+            results['is_valid'] = False
+            results['reason']   = resp2.reason
+            return
+ 
+        # ------------------------------Event c: Verify Credit Card------------------------------------
+        logger.info("Transaction verification | Event 3: VerifyCreditCard")
+        resp3 = stub.VerifyCreditCard(
+            transaction_verification.VerifyCreditCardRequest(
+                number          = credit_card.get('number', ''),
+                expiration_date = credit_card.get('expirationDate', ''),
+                cvv             = credit_card.get('cvv', ''),
+            )
+        )
+        if not resp3.is_valid:
+            logger.warning(f"Transaction verification failed at Event c: {resp3.reason}")
+            results['is_valid'] = False
+            results['reason']   = resp3.reason
+            return
+ 
+
+    results['is_valid'] = True
+    results['reason']   = ""
+    logger.info("Transaction verification passed all 3 events")
 
 def get_suggestions(book_titles, results):
     """Call suggestions gRPC service. Stores result in shared dict."""
@@ -143,19 +196,19 @@ def checkout():
     request_data = json.loads(request.data)
     logger.info(f"Checkout request received | items: {request_data.get('items')}")
 
+    user            = request_data.get('user', {})
+    credit_card     = request_data.get('creditCard', {})
+    billing_address = request_data.get('billingAddress', {})
+    items           = [item.get('name', '') for item in request_data.get('items', [])]
     
-    items = [item.get('name', '') for item in request_data.get('items', [])]
-    
-    items = [item.get('name', '') for item in request_data.get('items', [])]
-    card_number = request_data.get('creditCard', {}).get('number', '')
-    logger.info(f"Processing checkout | items: {items}")
+    logger.info(f"Processing checkout | user: {user.get('name')} | items: {items}")
 
     # Shared dictionary for thread results
     results = {}
 
     # Create threads for parallel gRPC calls
     t1 = threading.Thread(target=run_fraud_detection, args=(request_data, results))
-    t2 = threading.Thread(target=check_transaction, args=(card_number, items, results))
+    t2 = threading.Thread(target=check_transaction, args=(items, user, billing_address, credit_card, results))
     t3 = threading.Thread(target=get_suggestions, args=(items, results))
 
     # Start all threads
