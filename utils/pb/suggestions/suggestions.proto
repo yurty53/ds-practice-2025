@@ -3,11 +3,21 @@ syntax = "proto3";
 package suggestions;
 
 service SuggestionsService {
+    rpc InitOrder (InitOrderRequest) returns (InitOrderResponse);
     rpc GetSuggestions (SuggestionsRequest) returns (SuggestionsResponse);
+}
+
+message InitOrderRequest {
+    string order_id = 1;
+}
+
+message InitOrderResponse {
+    bool success = 1;
 }
 
 message SuggestionsRequest {
     repeated string book_titles = 1;
+    map<string, int32> vector_clock = 2;
 }
 
 message Book {
@@ -17,4 +27,5 @@ message Book {
 
 message SuggestionsResponse {
     repeated Book books = 1;
+    map<string, int32> vector_clock = 2;
 }
