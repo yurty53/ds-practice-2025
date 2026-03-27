@@ -291,6 +291,82 @@ def run_event_f(order_id, book_titles, vc_e):
     order_vc.setdefault(order_id, {})['vc_f'] = final_vc
     suggested_books = [{'title': book.title, 'author': book.author} for book in response.books]
     return suggested_books, final_vc
+
+
+def get_last_known_vector_clock(order_id):
+    """Return the latest known vector clock snapshot for an order."""
+    snapshot = order_vc.get(order_id, {})
+
+    # If we already have a flat VC map, return it directly.
+    if snapshot and all(isinstance(v, int) for v in snapshot.values()):
+        return dict(snapshot)
+
+    for key in ('vc_f', 'vc_e', 'vc_c', 'vc_d', 'vc_b', 'vc_a'):
+        vc = snapshot.get(key)
+        if isinstance(vc, dict):
+            return dict(vc)
+
+    return {}
+
+
+def broadcast_clear_order(order_id):
+    """Broadcast ClearOrder to all services in parallel using last known VC."""
+    vc_for_clear = get_last_known_vector_clock(order_id)
+
+    def clear_transaction_verification():
+        logger.info(f"[{order_id}] Broadcast: Clearing data from service transaction_verification")
+        with grpc.insecure_channel('transaction_verification:50052') as channel:
+            stub = transaction_verification_grpc.TransactionVerificationServiceStub(channel)
+            response = stub.ClearOrder(
+                transaction_verification.ClearRequest(
+                    order_id=order_id,
+                    vector_clock=vc_for_clear,
+                )
+            )
+            if not response.success:
+                raise RuntimeError("ClearOrder returned success=False")
+
+    def clear_fraud_detection():
+        logger.info(f"[{order_id}] Broadcast: Clearing data from service fraud_detection")
+        with grpc.insecure_channel('fraud_detection:50051') as channel:
+            stub = fraud_detection_grpc.FraudDetectionServiceStub(channel)
+            response = stub.ClearOrder(
+                fraud_detection.ClearRequest(
+                    order_id=order_id,
+                    vector_clock=vc_for_clear,
+                )
+            )
+            if not response.success:
+                raise RuntimeError("ClearOrder returned success=False")
+
+    def clear_suggestions():
+        logger.info(f"[{order_id}] Broadcast: Clearing data from service suggestions")
+        with grpc.insecure_channel('suggestions:50053') as channel:
+            stub = suggestions_grpc.SuggestionsServiceStub(channel)
+            response = stub.ClearOrder(
+                suggestions.ClearRequest(
+                    order_id=order_id,
+                    vector_clock=vc_for_clear,
+                )
+            )
+            if not response.success:
+                raise RuntimeError("ClearOrder returned success=False")
+
+    tasks = {
+        'transaction_verification': clear_transaction_verification,
+        'fraud_detection': clear_fraud_detection,
+        'suggestions': clear_suggestions,
+    }
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(task): service_name for service_name, task in tasks.items()}
+        for future in as_completed(futures):
+            service_name = futures[future]
+            try:
+                future.result()
+                logger.info(f"[{order_id}] Broadcast: ClearOrder completed for service {service_name}")
+            except Exception as exc:
+                logger.warning(f"[{order_id}] Broadcast: ClearOrder failed for service {service_name}: {exc}")
         
 # ---OLD CODE---
 # def check_transaction(order_id, credit_card, results):
@@ -422,6 +498,9 @@ def checkout(order_data):
             'suggestedBooks': suggested_books,
             'vectorClock': final_vc,
         }
+    finally:
+        broadcast_clear_order(order_id)
+        order_vc.pop(order_id, None)
 
     return order_status_response
 

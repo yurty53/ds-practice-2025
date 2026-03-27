@@ -20,6 +20,11 @@ logger = logging.getLogger(__name__)
 # Minimal initialization cache for order lifecycle alignment across services.
 order_store = {}
 
+# Vector clock store: order_id -> { service_name: int }
+vector_clocks = {}
+
+SERVICE_NAME = "suggestions"
+
 # Book catalogue organized by genre
 CATALOGUE = {
     "Magical Realism": [
@@ -57,6 +62,13 @@ for genre, books in CATALOGUE.items():
 
 
 class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
+    def _is_local_vc_inferior_or_equal(self, order_id, incoming_vc):
+        local_vc = vector_clocks.get(order_id, {})
+        for key, local_value in local_vc.items():
+            if local_value > incoming_vc.get(key, 0):
+                return False
+        return True
+
     def InitOrder(self, request, context):
         order_id = request.order_id
         if not order_id:
@@ -64,6 +76,7 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             return suggestions.InitOrderResponse(success=False)
 
         order_store[order_id] = {"initialized": True}
+        vector_clocks[order_id] = {SERVICE_NAME: 0}
         logger.info(f"[{order_id}] Suggestions InitOrder complete")
         return suggestions.InitOrderResponse(success=True)
 
@@ -99,6 +112,24 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             books=suggested,
             vector_clock=dict(request.vector_clock)
         )
+
+    def ClearOrder(self, request, context):
+        order_id = request.order_id
+        incoming_vc = dict(request.vector_clock)
+
+        if order_id not in order_store or order_id not in vector_clocks:
+            logger.info(f"[{order_id}] ClearOrder no-op: order not found")
+            return suggestions.ClearResponse(success=True)
+
+        local_vc = dict(vector_clocks[order_id])
+        if self._is_local_vc_inferior_or_equal(order_id, incoming_vc):
+            del order_store[order_id]
+            del vector_clocks[order_id]
+            logger.info(f"[{order_id}] ClearOrder applied | local_vc={local_vc} incoming_vc={incoming_vc}")
+        else:
+            logger.info(f"[{order_id}] ClearOrder skipped | local_vc={local_vc} incoming_vc={incoming_vc}")
+
+        return suggestions.ClearResponse(success=True)
 
 
 def serve():

@@ -7,6 +7,7 @@ service TransactionVerificationService {
     rpc VerifyItems (VerifyRequest) returns (VerifyResponse);
     rpc VerifyUserData (VerifyRequest) returns (VerifyResponse);
     rpc VerifyCreditCard (VerifyRequest) returns (VerifyResponse);
+    rpc ClearOrder (ClearRequest) returns (ClearResponse);
 }
 
 message InitOrderRequest {
@@ -31,4 +32,13 @@ message VerifyResponse {
     bool is_valid = 1;
     string reason = 2;
     map<string, int32> vector_clock = 3;
+}
+
+message ClearRequest {
+    string order_id = 1;
+    map<string, int32> vector_clock = 2;
+}
+
+message ClearResponse {
+    bool success = 1;
 }

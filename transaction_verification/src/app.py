@@ -35,6 +35,13 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
         vector_clocks[order_id] = vc
         return vc
 
+    def _is_local_vc_inferior_or_equal(self, order_id, incoming_vc):
+        local_vc = vector_clocks.get(order_id, {})
+        for key, local_value in local_vc.items():
+            if local_value > incoming_vc.get(key, 0):
+                return False
+        return True
+
     def InitOrder(self, request, context):
         order_id = request.order_id
         if not order_id:
@@ -173,6 +180,24 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
  
         logger.info(f"[{order_id}] [Event c] Approved: credit card format is valid")
         return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+
+    def ClearOrder(self, request, context):
+        order_id = request.order_id
+        incoming_vc = dict(request.vector_clock)
+
+        if order_id not in order_store or order_id not in vector_clocks:
+            logger.info(f"[{order_id}] ClearOrder no-op: order not found")
+            return transaction_verification.ClearResponse(success=True)
+
+        local_vc = dict(vector_clocks[order_id])
+        if self._is_local_vc_inferior_or_equal(order_id, incoming_vc):
+            del order_store[order_id]
+            del vector_clocks[order_id]
+            logger.info(f"[{order_id}] ClearOrder applied | local_vc={local_vc} incoming_vc={incoming_vc}")
+        else:
+            logger.info(f"[{order_id}] ClearOrder skipped | local_vc={local_vc} incoming_vc={incoming_vc}")
+
+        return transaction_verification.ClearResponse(success=True)
 
 def serve():
     """Start gRPC server on port 50052."""
