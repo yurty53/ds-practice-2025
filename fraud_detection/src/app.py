@@ -72,6 +72,13 @@ def check_card_fraud(card_number, expiration_date):
 
 class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
 
+    def _is_local_vc_inferior_or_equal(self, order_id, incoming_vc):
+        local_vc = vector_clocks.get(order_id, {})
+        for key, local_value in local_vc.items():
+            if local_value > incoming_vc.get(key, 0):
+                return False
+        return True
+
     def InitOrder(self, request, context):
         order_id = request.order_id
         order_store[order_id] = {
@@ -129,6 +136,24 @@ class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
             reason=reason,
             vector_clock=vc
         )
+
+    def ClearOrder(self, request, context):
+        order_id = request.order_id
+        incoming_vc = dict(request.vector_clock)
+
+        if order_id not in order_store or order_id not in vector_clocks:
+            logger.info(f"[{order_id}] ClearOrder no-op: order not found")
+            return fraud_detection.ClearResponse(success=True)
+
+        local_vc = dict(vector_clocks[order_id])
+        if self._is_local_vc_inferior_or_equal(order_id, incoming_vc):
+            del order_store[order_id]
+            del vector_clocks[order_id]
+            logger.info(f"[{order_id}] ClearOrder applied | local_vc={local_vc} incoming_vc={incoming_vc}")
+        else:
+            logger.info(f"[{order_id}] ClearOrder skipped | local_vc={local_vc} incoming_vc={incoming_vc}")
+
+        return fraud_detection.ClearResponse(success=True)
 
 
 def serve():

@@ -3,32 +3,42 @@ syntax = "proto3";
 package transaction_verification;
 
 service TransactionVerificationService {
-    rpc VerifyItems (VerifyItemsRequest) returns (VerifyResponse);
-    rpc VerifyUserData (VerifyUserDataRequest) returns (VerifyResponse);
-    rpc VerifyCreditCard (VerifyCreditCardRequest) returns (VerifyResponse);
+    rpc InitOrder (InitOrderRequest) returns (InitOrderResponse);
+    rpc VerifyItems (VerifyRequest) returns (VerifyResponse);
+    rpc VerifyUserData (VerifyRequest) returns (VerifyResponse);
+    rpc VerifyCreditCard (VerifyRequest) returns (VerifyResponse);
+    rpc ClearOrder (ClearRequest) returns (ClearResponse);
 }
 
-message VerifyItemsRequest {
-    repeated string items = 1;
+message InitOrderRequest {
+    string order_id        = 1;
+    repeated string items  = 2;
+    string user_name       = 3;
+    string user_contact    = 4;
+    string card_number     = 5;
+    string expiration_date = 6;
 }
 
-message VerifyUserDataRequest {
-    string name    = 1;
-    string contact = 2;
-    string street  = 3;
-    string city    = 4;
-    string state   = 5;
-    string zip     = 6;
-    string country = 7;
+message InitOrderResponse {
+    bool success = 1;
 }
 
-message VerifyCreditCardRequest {
-    string number          = 1;
-    string expiration_date = 2;
-    string cvv             = 3;
+message VerifyRequest {
+    string order_id = 1;
+    map<string, int32> vector_clock = 2;
 }
 
 message VerifyResponse {
-    bool   is_valid = 1;
-    string reason   = 2;
+    bool is_valid = 1;
+    string reason = 2;
+    map<string, int32> vector_clock = 3;
+}
+
+message ClearRequest {
+    string order_id = 1;
+    map<string, int32> vector_clock = 2;
+}
+
+message ClearResponse {
+    bool success = 1;
 }

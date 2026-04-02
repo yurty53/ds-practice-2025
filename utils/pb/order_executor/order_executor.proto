@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package order_executor;
+
+service OrderExecutor {
+    // Start a Bully election.
+    rpc Election (ElectionRequest) returns (ElectionResponse);
+
+    // Announce the new leader.
+    rpc Coordinator (CoordinatorRequest) returns (CoordinatorResponse);
+
+    // Check that the leader is alive.
+    rpc Heartbeat (HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message ElectionRequest {
+    int32 executor_id = 1;
+}
+
+message ElectionResponse {
+    int32 executor_id = 1;
+    bool ok = 2;
+}
+
+message CoordinatorRequest {
+    int32 executor_id = 1;
+}
+
+message CoordinatorResponse {
+    int32 executor_id = 1;
+    bool acknowledged = 2;
+}
+
+message HeartbeatRequest {
+    int32 executor_id = 1;
+}
+
+message HeartbeatResponse {
+    int32 executor_id = 1;
+    bool alive = 2;
+}
