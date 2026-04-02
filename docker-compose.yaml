@@ -93,3 +93,37 @@ services:
     volumes:
       - ./utils:/app/utils
       - ./order_queue/src:/app/order_queue/src
+
+  executor1:
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    container_name: executor1
+    ports:
+      - "50055:50050"
+    depends_on:
+      - order_queue
+    volumes:
+      - ./utils:/app/utils
+      - ./order_executor/src:/app/order_executor/src
+    environment:
+      - EXECUTOR_ID=1
+      - PEERS=executor2:50050
+      - PYTHONUNBUFFERED=TRUE
+
+  executor2:
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    container_name: executor2
+    ports:
+      - "50056:50050"
+    depends_on:
+      - order_queue
+    volumes:
+      - ./utils:/app/utils
+      - ./order_executor/src:/app/order_executor/src
+    environment:
+      - EXECUTOR_ID=2
+      - PEERS=executor1:50050
+      - PYTHONUNBUFFERED=TRUE
