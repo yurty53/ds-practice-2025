@@ -21,6 +21,11 @@ sys.path.insert(0, suggestions_grpc_path)
 import suggestions_pb2 as suggestions
 import suggestions_pb2_grpc as suggestions_grpc
 
+order_queue_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/order_queue'))
+sys.path.insert(0, order_queue_grpc_path)
+import order_queue_pb2 as order_queue
+import order_queue_pb2_grpc as order_queue_grpc
+
 import grpc
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -492,12 +497,33 @@ def checkout(order_data):
         }
     else:
         logger.info("Order approved")
+
+        # Enqueue the order for processing by leader service
+        try:
+            with grpc.insecure_channel('order_queue:50054') as channel:
+                queue_stub = order_queue_grpc.OrderQueueStub(channel)
+                queue_stub.Enqueue(order_queue.EnqueueRequest(
+                    order=order_queue.Order(
+                        order_id=order_id,
+                        items=[
+                            order_queue.OrderItem(name=item)
+                            for item in items
+                        ],
+                        user_name=user.get('name', ''),
+                        user_contact=user.get('contact', ''),
+                    )
+                ))
+                logger.info(f"[{order_id}] Order enqueued successfully")
+        except Exception as exc:
+            logger.warning(f"[{order_id}] Failed to enqueue order: {exc}")
+
         order_status_response = {
             'orderId': order_id,
             'status': 'Order Approved',
             'suggestedBooks': suggested_books,
             'vectorClock': final_vc,
         }
+    
     finally:
         broadcast_clear_order(order_id)
         order_vc.pop(order_id, None)

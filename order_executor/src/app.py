@@ -187,7 +187,10 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                     resp = queue_stub.Dequeue(order_queue.DequeueRequest(), timeout=2)
 
                 if resp.success:
-                    logger.info(f"Order [{resp.order.order_id}] is being executed...")
+                    order = resp.order
+                    logger.info(f"[{order.order_id}] Executing order | user: {order.user_name} | items: {[i.name for i in order.items]}")
+                    time.sleep(0.5)
+                    logger.info(f"[{order.order_id}] Order executed successfully")
                 else:
                     time.sleep(2)
             except Exception as ex:
