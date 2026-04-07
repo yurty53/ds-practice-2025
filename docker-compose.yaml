@@ -108,7 +108,7 @@ services:
       - ./order_executor/src:/app/order_executor/src
     environment:
       - EXECUTOR_ID=1
-      - PEERS=executor2:50050
+      - EXECUTOR_NODES=1=executor1:50050,2=executor2:50050,3=executor3:50050
       - PYTHONUNBUFFERED=TRUE
 
   executor2:
@@ -125,5 +125,22 @@ services:
       - ./order_executor/src:/app/order_executor/src
     environment:
       - EXECUTOR_ID=2
-      - PEERS=executor1:50050
+      - EXECUTOR_NODES=1=executor1:50050,2=executor2:50050,3=executor3:50050
+      - PYTHONUNBUFFERED=TRUE
+
+  executor3:
+    build:
+      context: .
+      dockerfile: order_executor/Dockerfile
+    container_name: executor3
+    ports:
+      - "50057:50050"
+    depends_on:
+      - order_queue
+    volumes:
+      - ./utils:/app/utils
+      - ./order_executor/src:/app/order_executor/src
+    environment:
+      - EXECUTOR_ID=3
+      - EXECUTOR_NODES=1=executor1:50050,2=executor2:50050,3=executor3:50050
       - PYTHONUNBUFFERED=TRUE

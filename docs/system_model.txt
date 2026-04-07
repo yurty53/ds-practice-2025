@@ -1,0 +1,110 @@
+System Model Description
+
+The online bookstore operates as a distributed microservices system, where a static
+frontend (served by Nginx on port 8080) acts as the client and communicates
+synchronously with a central orchestrator service (Flask/REST on port 8081) to
+submit checkout requests and retrieve book recommendations. The orchestrator serves
+as the coordination hub: it receives checkout requests over HTTP/JSON, drives a
+multi-stage verification pipeline across downstream gRPC services, and returns a
+final order decision to the frontend. All inter-service communication beyond the
+frontend-orchestrator boundary uses gRPC over Protocol Buffers, providing strongly
+typed, efficient binary messaging across the internal Docker network.
+
+The system comprises seven services. The frontend consists of two pages: index.html,
+which serves the book catalogue and allows users to browse by genre and manage their
+cart, and checkout.html, which presents the payment form and submits the order to
+the orchestrator via a POST /checkout request. The orchestrator coordinates the full order lifecycle. Three
+verification and recommendation services handle domain logic: fraud_detection
+(port 50051) validates user identity via name/email format checks and credit card
+integrity via the Luhn algorithm; transaction_verification (port 50052) validates
+item list contents, user data fields, and card format; and suggestions (port 50053)
+returns genre-matched book recommendations based on cart contents. Two
+infrastructure services handle asynchronous order execution: order_queue (port
+50054) maintains a thread-safe in-memory FIFO queue, and three order_executor
+instances (executor1 on host port 50055, executor2 on 50056, executor3 on 50057,
+all listening on container port 50050) compete for leadership to dequeue and process
+approved orders.
+
+Communication is synchronous throughout the checkout pipeline. The orchestrator
+calls fraud_detection, transaction_verification, and suggestions via blocking gRPC
+stubs, using Python threading to issue causally independent calls in parallel where
+the event graph permits. The order execution path is asynchronous and decoupled:
+once the orchestrator enqueues an approved order to order_queue, it returns
+immediately to the client and the executor cluster processes orders independently.
+
+Causal ordering across the verification pipeline is enforced using vector clocks.
+The orchestrator coordinates a six-event partial order (events a through f). Events
+a (VerifyItems) and b (VerifyUserData) run in parallel with empty vector clocks;
+their clocks are merged component-wise (taking the maximum per entry) and forwarded
+to event c (VerifyCreditCard), which depends causally on both. Event d
+(CheckUserFraud) runs concurrently with the a-b-c chain. The results of c and d
+are merged and forwarded to event e (CheckCreditCardFraud), which depends causally
+on both. Event f (GetSuggestions) runs only after e completes successfully. Each
+service maintains a per-order vector clock and applies the standard merge rule:
+vc[service] = max(local[service], incoming[service]) + 1 on every RPC call, so the
+clock reflects the causal history of all events that preceded it. transaction_verification
+additionally enforces an application-level causal guard: event c is rejected if event
+a has not been validated, preventing card format checks on an order with no items.
+
+Bonus 1 — Broadcast ClearOrder with final vector clock VCf: After the checkout
+pipeline completes, regardless of whether the order was approved or rejected, the
+orchestrator executes a broadcast in a finally block, guaranteeing it runs in both
+success and failure paths. It retrieves the furthest-along vector clock snapshot
+(preferring vc_f, then falling back through vc_e, vc_c, vc_d, vc_b, vc_a) and sends
+ClearOrder RPCs in parallel to fraud_detection, transaction_verification, and
+suggestions, attaching this final clock VCf to each message. Each service compares
+its local vector clock against the incoming VCf: if the local clock is
+component-wise less than or equal to VCf, the order state is safely deleted and
+success=True is returned; if the local clock is ahead of VCf in any component,
+indicating unprocessed events that the orchestrator is not aware of, the service
+refuses to clear, logs a warning, and returns success=False. The orchestrator raises
+and logs an error for any service that returns success=False, satisfying the
+requirement that a causal violation is surfaced rather than silently ignored.
+
+Bonus 2 — Vector clock incremented at event f: Prior to the fix, GetSuggestions
+in suggestions returned the incoming vector clock unchanged, meaning VCf was
+identical to VCe and the suggestions service's own participation in the causal chain
+was invisible. The fix applies the same merge-and-increment rule used by all other
+services: vc[suggestions] = max(local, incoming) + 1. The updated clock is stored
+locally and returned to the orchestrator as the true VCf, which is then broadcast
+in the ClearOrder messages. The suggestions service's ClearOrder guard now operates
+on a non-trivial local clock, making the VC check meaningful for event f as well.
+
+Bonus 3 — Leader election across N > 2 executor replicas, and resolution of a
+startup race condition: Order execution is governed by the Bully algorithm running
+across three executor instances. Each executor is assigned a unique integer ID
+(1, 2, 3) via the EXECUTOR_ID environment variable and is given a full view of the
+cluster via EXECUTOR_NODES. On startup, each executor launches a bootstrap election
+thread, sends Election RPCs to all peers with a higher ID, and declares itself leader
+if no higher peer responds within the timeout. Higher-ID peers respond with ok=True
+and trigger their own election, propagating upward until the highest reachable node
+wins and broadcasts a Coordinator message to all peers. Followers subsequently
+monitor the leader by sending Heartbeat RPCs every five seconds; an unreachable
+leader triggers a new election round. Only the elected leader dequeues and processes
+orders from order_queue, providing mutual exclusion over order execution: a single
+node holds the right to dequeue at any time, backed by order_queue's internal
+threading lock for atomic dequeue operations.
+
+A startup race condition was encountered during testing with three replicas. Executor2
+(ID=2) was observed firing its bootstrap election before executor3 (ID=3) had finished 
+binding its gRPC port. As a result, executor2 sent an Election message to executor3, 
+received no response (connection refused), treated executor3 as absent, and declared 
+itself leader. Once executor3 came online, it had no mechanism to challenge the 
+sitting leader — the Bully algorithm only triggers re-election on failure detection, 
+not on a new peer joining. Executor3 therefore remained a permanent follower even 
+though it held the highest ID and should have been the rightful leader. 
+The fix was to introduce a 3-second startup delay in the bootstrap election thread of 
+every executor, applied uniformly in a shared bootstrap() function before the call to 
+start_election(). This guarantees that all three containers have bound their ports and 
+are reachable before any Election message is sent, allowing the Bully algorithm to operate 
+correctly and elect executor3 as the initial leader in all startup scenarios.
+
+The system is designed to handle crash and omission failures. In the verification
+pipeline, any gRPC exception is caught by the orchestrator and treated as an order
+rejection, ensuring the client always receives a response. In the executor cluster,
+leader crashes are detected within five seconds via heartbeat timeout, after which
+a new Bully election elects the surviving executor with the highest ID as the
+replacement leader, restoring order processing without manual intervention. The
+ClearOrder vector clock guard provides protection against state corruption due to
+message reordering at cleanup time: a service will not delete its local order state
+if doing so would violate causal consistency.

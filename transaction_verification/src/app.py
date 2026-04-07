@@ -194,10 +194,10 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
             del order_store[order_id]
             del vector_clocks[order_id]
             logger.info(f"[{order_id}] ClearOrder applied | local_vc={local_vc} incoming_vc={incoming_vc}")
+            return transaction_verification.ClearResponse(success=True)
         else:
-            logger.info(f"[{order_id}] ClearOrder skipped | local_vc={local_vc} incoming_vc={incoming_vc}")
-
-        return transaction_verification.ClearResponse(success=True)
+            logger.warning(f"[{order_id}] ClearOrder rejected: local VC ahead of incoming | local_vc={local_vc} incoming_vc={incoming_vc}")
+            return transaction_verification.ClearResponse(success=False)
 
 def serve():
     """Start gRPC server on port 50052."""
