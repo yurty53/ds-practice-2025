@@ -4,24 +4,26 @@ This repository contains the implementation of a distributed bookstore system fo
 
 ## Documentation
 
-- **[Architecture](docs/ARCHITECTURE.md)** - System architecture and design
-- **[Testing Guide](docs/TESTING_GUIDE.md)** - Test scenarios
+- **[Architecture CP1](docs/ARCHITECTURE_CP1.md)** - System architecture and design (Checkpoint #1)
+- **[Testing Guide CP1](docs/TESTING_GUIDE_CP1.md)** - Test scenarios (Checkpoint #1)
+- **[Architecture CP2](docs/ARCHITECTURE_CP2.md)** - System architecture and design (Checkpoint #2)
+- **[Testing Guide CP2](docs/TESTING_GUIDE_CP2.md)** - Test scenarios (Checkpoint #2)
 - **[Utils](utils/README.md)** - Protocol Buffer specifications
 
 ## System Architecture
 
-The system consists of 5 microservices communicating via REST and gRPC protocols:
+The system consists of 9 service instances communicating via REST and gRPC protocols:
 
 ### Services Overview
 
-1. **Frontend** (Port 8080)
+1. **Frontend** (Port 8080 -> container 80)
    - Static HTML/JavaScript interface
    - Communicates with orchestrator via REST API
 
-2. **Orchestrator** (Port 8081)
+2. **Orchestrator** (Port 8081 -> container 5000)
    - REST API server (Flask)
    - Coordinates communication between gRPC services
-   - Implements parallel processing using threading
+   - Handles synchronous verification and asynchronous enqueue
    - Endpoints: `/checkout`, `/suggestions`
 
 3. **Fraud Detection** (Port 50051)
@@ -39,6 +41,23 @@ The system consists of 5 microservices communicating via REST and gRPC protocols
    - Provides book recommendations based on cart contents
    - Uses genre-based matching algorithm
 
+6. **Order Queue** (Port 50054)
+   - gRPC FIFO queue for approved orders
+   - Receives `Enqueue` from orchestrator
+   - Serves `Dequeue` to the current executor leader
+
+7. **Executor 1** (Host 50055 -> container 50050)
+   - Order execution replica
+   - Participates in Bully election and heartbeat checks
+
+8. **Executor 2** (Host 50056 -> container 50050)
+   - Order execution replica
+   - Participates in Bully election and heartbeat checks
+
+9. **Executor 3** (Host 50057 -> container 50050)
+   - Order execution replica
+   - Participates in Bully election and heartbeat checks
+
 ### Communication Protocols
 
 - **Frontend ↔ Orchestrator**: REST (HTTP/JSON)
@@ -46,7 +65,11 @@ The system consists of 5 microservices communicating via REST and gRPC protocols
 
 ### Key Features
 
-- **Parallel Processing**: Orchestrator uses threading to call all 3 gRPC services concurrently
+- **Decoupled Flow**: Verification is synchronous, execution is asynchronous via `order_queue`
+- **Vector Clocks**: Causal ordering is tracked across events `a` to `f`
+- **Causal Cleanup**: `ClearOrder` broadcast with final vector clock (`VCf`) clears per-order temporary state safely
+- **Bully Leader Election**: 3 executors elect the highest alive ID as leader for queue consumption
+- **Heartbeat Fault Detection**: Followers detect leader crashes and trigger re-election automatically
 - **Logging**: Comprehensive logging across all services for debugging and monitoring
 - **Docker Compose**: All services containerized and orchestrated
 - **Hot Reload**: Code changes automatically reflected without manual restart

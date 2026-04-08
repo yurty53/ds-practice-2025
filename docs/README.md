@@ -4,7 +4,7 @@ This folder contains documentation for the distributed bookstore system.
 
 ## Files
 
-- **[ARCHITECTURE.md](ARCHITECTURE_CP1.md)** - System architecture and data flow CP1
-- **[TESTING_GUIDE.md](TESTING_GUIDE_CP1.md)** - Test scenarios CP1
-- **[ARCHITECTURE.md](ARCHITECTURE_CP2.md)** - System architecture and data flow CP2
-- **[TESTING_GUIDE.md](TESTING_GUIDE_CP2.md)** - Test scenarios CP2
+- **[ARCHITECTURE_CP1.md](ARCHITECTURE_CP1.md)** - Architecture documentation for Checkpoint #1
+- **[TESTING_GUIDE_CP1.md](TESTING_GUIDE_CP1.md)** - Testing guide for Checkpoint #1
+- **[ARCHITECTURE_CP2.md](ARCHITECTURE_CP2.md)** - Architecture documentation for Checkpoint #2
+- **[TESTING_GUIDE_CP2.md](TESTING_GUIDE_CP2.md)** - Testing guide for Checkpoint #2
