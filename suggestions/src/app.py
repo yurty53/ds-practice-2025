@@ -85,9 +85,17 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
         Get book recommendations based on cart contents.
         Algorithm: find genres of cart books, suggest other books from same genres.
         """
+        order_id = getattr(request, 'order_id', '')
         cart_titles = set(request.book_titles)
-        logger.info(f"GetSuggestions called | cart: {list(cart_titles)}")
-        logger.info(f"GetSuggestions VC: {dict(request.vector_clock)}")
+
+        # Merge incoming VC and increment own counter (event f)
+        vc = dict(request.vector_clock)
+        local_counter = vector_clocks.get(order_id, {}).get(SERVICE_NAME, 0)
+        vc[SERVICE_NAME] = max(local_counter, vc.get(SERVICE_NAME, 0)) + 1
+        if order_id in vector_clocks:
+            vector_clocks[order_id] = vc
+
+        logger.info(f"[{order_id}] Event f: GetSuggestions | cart: {list(cart_titles)} | VC: {vc}")
 
         # Identify genres of books in cart
         genres = set()
@@ -95,7 +103,7 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             if title in TITLE_TO_GENRE:
                 genres.add(TITLE_TO_GENRE[title])
 
-        logger.info(f"Detected genres: {genres}")
+        logger.info(f"[{order_id}] Detected genres: {genres}")
 
         # Find suggestions from same genres, excluding cart items
         suggested = []
@@ -107,10 +115,10 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
                         author=book["author"]
                     ))
 
-        logger.info(f"Returning {len(suggested)} suggestions")
+        logger.info(f"[{order_id}] Returning {len(suggested)} suggestions")
         return suggestions.SuggestionsResponse(
             books=suggested,
-            vector_clock=dict(request.vector_clock)
+            vector_clock=vc
         )
 
     def ClearOrder(self, request, context):
@@ -126,10 +134,10 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
             del order_store[order_id]
             del vector_clocks[order_id]
             logger.info(f"[{order_id}] ClearOrder applied | local_vc={local_vc} incoming_vc={incoming_vc}")
+            return suggestions.ClearResponse(success=True)
         else:
-            logger.info(f"[{order_id}] ClearOrder skipped | local_vc={local_vc} incoming_vc={incoming_vc}")
-
-        return suggestions.ClearResponse(success=True)
+            logger.warning(f"[{order_id}] ClearOrder rejected: local VC ahead of incoming | local_vc={local_vc} incoming_vc={incoming_vc}")
+            return suggestions.ClearResponse(success=False)
 
 
 def serve():

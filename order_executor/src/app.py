@@ -243,7 +243,12 @@ def serve():
     threading.Thread(target=service.follower_heartbeat_loop, daemon=True).start()
 
     # Bootstrap election at startup so a leader emerges.
-    threading.Thread(target=service.start_election, daemon=True).start()
+    # Delay allows all peer containers to come online before Election messages are sent.
+    def bootstrap():
+        time.sleep(3)
+        service.start_election()
+
+    threading.Thread(target=bootstrap, daemon=True).start()
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     order_executor_grpc.add_OrderExecutorServicer_to_server(service, server)

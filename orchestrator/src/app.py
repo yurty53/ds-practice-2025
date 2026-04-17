@@ -474,7 +474,8 @@ def checkout(order_data):
         return {
             'orderId': order_id,
             'status': 'Order Rejected',
-            'suggestedBooks': []
+            'suggestedBooks': [],
+            'vectorClock': order_vc.get(order_id, {})
         }
     
     logger.info(f"Processing checkout | user: {user.get('name')} | items: {items}")
