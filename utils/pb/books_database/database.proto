@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+service BooksDatabase {
+  rpc Read(ReadRequest) returns (ReadResponse);
+  rpc Write(WriteRequest) returns (WriteResponse);
+  rpc LocalRead(ReadRequest) returns (ReadResponse);
+  rpc LocalWrite(WriteRequest) returns (WriteResponse);
+}
+
+message ReadRequest {
+  string key = 1;
+}
+
+message ReadResponse {
+  string value = 1;
+  int64 version = 2;
+  bool found = 3;
+}
+
+message WriteRequest {
+  string key = 1;
+  string value = 2;
+  int64 expected_version = 3;
+}
+
+message WriteResponse {
+  bool success = 1;
+  int64 version = 2;
+  string error = 3;
+}
