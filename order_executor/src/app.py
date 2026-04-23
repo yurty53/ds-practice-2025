@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import random
 import threading
 import logging
 import re
@@ -18,6 +19,11 @@ order_queue_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/or
 sys.path.insert(0, order_queue_grpc_path)
 import order_queue_pb2 as order_queue
 import order_queue_pb2_grpc as order_queue_grpc
+
+database_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/books_database'))
+sys.path.insert(0, database_grpc_path)
+import database_pb2
+import database_pb2_grpc
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
@@ -72,10 +78,20 @@ def parse_executor_nodes(default_executor_id: int, default_port: int):
     return nodes
 
 
+def parse_db_targets():
+    """Parse BooksDatabase targets from env."""
+    raw = os.getenv("BOOKS_DB_TARGETS", "database1:50055,database2:50055,database3:50055")
+    targets = [addr.strip() for addr in raw.split(',') if addr.strip()]
+    return targets or ["database1:50055", "database2:50055", "database3:50055"]
+
+
 class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
     def __init__(self):
         self.id = int(os.getenv("EXECUTOR_ID", "1"))
         self.port = int(os.getenv("EXECUTOR_PORT", "50050"))
+        self.db_targets = parse_db_targets()
+        self.max_db_write_retries = int(os.getenv("MAX_DB_WRITE_RETRIES", "5"))
+        self.db_rpc_timeout_sec = float(os.getenv("DB_RPC_TIMEOUT_SEC", "2"))
 
         # Required state
         self.is_leader = False
@@ -86,7 +102,125 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         self._election_in_progress = False
 
         self.nodes = parse_executor_nodes(self.id, self.port)
-        logger.info(f"Executor {self.id} started | nodes={self.nodes}")
+        logger.info(
+            f"Executor {self.id} started | nodes={self.nodes} "
+            f"| db_targets={self.db_targets} | retries={self.max_db_write_retries}"
+        )
+
+    def _normalize_quantity(self, item):
+        # Proto3 defaults missing int32 fields to 0, so map missing/invalid to 1.
+        if isinstance(item, dict):
+            quantity = item.get("quantity", 1)
+        else:
+            quantity = getattr(item, "quantity", 0)
+
+        try:
+            quantity = int(quantity)
+        except (TypeError, ValueError):
+            return 1
+
+        return quantity if quantity > 0 else 1
+
+    def _get_item_name(self, item):
+        if isinstance(item, dict):
+            return str(item.get("name", "")).strip()
+        return str(getattr(item, "name", "")).strip()
+
+    def _get_order_items(self, order):
+        if isinstance(order, dict):
+            return order.get("items", [])
+        return order.items
+
+    def _is_cas_conflict(self, error_text):
+        return "version mismatch" in (error_text or "").lower()
+
+    def execute_order(self, order):
+        items = self._get_order_items(order)
+
+        for item in items:
+            item_name = self._get_item_name(item)
+            quantity = self._normalize_quantity(item)
+
+            if not item_name:
+                logger.warning("Order item with empty name encountered")
+                return False
+
+            for attempt in range(1, self.max_db_write_retries + 1):
+                db_target = random.choice(self.db_targets)
+
+                try:
+                    with grpc.insecure_channel(db_target) as channel:
+                        db_stub = database_pb2_grpc.BooksDatabaseStub(channel)
+                        read_resp = db_stub.Read(
+                            database_pb2.ReadRequest(key=item_name),
+                            timeout=self.db_rpc_timeout_sec,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        f"DB Read failed for item={item_name} target={db_target} "
+                        f"attempt={attempt}/{self.max_db_write_retries}: {exc}"
+                    )
+                    time.sleep(random.uniform(0.05, 0.2))
+                    continue
+
+                if not read_resp.found:
+                    logger.warning(f"Book not found in DB: {item_name}")
+                    return False
+
+                try:
+                    current_stock = int(read_resp.value)
+                except ValueError:
+                    logger.warning(f"Invalid stock value for {item_name}: {read_resp.value}")
+                    return False
+
+                if current_stock < quantity:
+                    logger.warning(
+                        f"Insufficient stock for {item_name}: requested={quantity}, available={current_stock}"
+                    )
+                    return False
+
+                new_stock = current_stock - quantity
+
+                try:
+                    with grpc.insecure_channel(db_target) as channel:
+                        db_stub = database_pb2_grpc.BooksDatabaseStub(channel)
+                        write_resp = db_stub.Write(
+                            database_pb2.WriteRequest(
+                                key=item_name,
+                                value=str(new_stock),
+                                expected_version=read_resp.version,
+                            ),
+                            timeout=self.db_rpc_timeout_sec,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        f"DB Write failed for item={item_name} target={db_target} "
+                        f"attempt={attempt}/{self.max_db_write_retries}: {exc}"
+                    )
+                    time.sleep(random.uniform(0.05, 0.2))
+                    continue
+
+                if write_resp.success:
+                    logger.info(
+                        f"Stock updated for {item_name}: {current_stock} -> {new_stock} "
+                        f"(version={write_resp.version})"
+                    )
+                    break
+
+                if self._is_cas_conflict(write_resp.error):
+                    logger.info(
+                        f"CAS conflict for {item_name} on attempt {attempt}/{self.max_db_write_retries}; retrying"
+                    )
+                    time.sleep(random.uniform(0.05, 0.2))
+                    continue
+
+                logger.warning(f"Write rejected for {item_name}: {write_resp.error}")
+                return False
+            else:
+                logger.warning(f"Failed to update stock for {item_name} after retries")
+                return False
+
+        return True
 
     def Election(self, request, context):
         """
@@ -189,8 +323,10 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                 if resp.success:
                     order = resp.order
                     logger.info(f"[{order.order_id}] Executing order | user: {order.user_name} | items: {[i.name for i in order.items]}")
-                    time.sleep(0.5)
-                    logger.info(f"[{order.order_id}] Order executed successfully")
+                    if self.execute_order(order):
+                        logger.info(f"[{order.order_id}] Order executed successfully")
+                    else:
+                        logger.warning(f"[{order.order_id}] Order execution failed")
                 else:
                     time.sleep(2)
             except Exception as ex:

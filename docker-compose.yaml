@@ -109,6 +109,9 @@ services:
     environment:
       - EXECUTOR_ID=1
       - EXECUTOR_NODES=1=executor1:50050,2=executor2:50050,3=executor3:50050
+      - BOOKS_DB_TARGETS=database1:50055,database2:50055,database3:50055
+      - MAX_DB_WRITE_RETRIES=5
+      - DB_RPC_TIMEOUT_SEC=2
       - PYTHONUNBUFFERED=TRUE
 
   executor2:
@@ -126,6 +129,9 @@ services:
     environment:
       - EXECUTOR_ID=2
       - EXECUTOR_NODES=1=executor1:50050,2=executor2:50050,3=executor3:50050
+      - BOOKS_DB_TARGETS=database1:50055,database2:50055,database3:50055
+      - MAX_DB_WRITE_RETRIES=5
+      - DB_RPC_TIMEOUT_SEC=2
       - PYTHONUNBUFFERED=TRUE
 
   executor3:
@@ -143,6 +149,9 @@ services:
     environment:
       - EXECUTOR_ID=3
       - EXECUTOR_NODES=1=executor1:50050,2=executor2:50050,3=executor3:50050
+      - BOOKS_DB_TARGETS=database1:50055,database2:50055,database3:50055
+      - MAX_DB_WRITE_RETRIES=5
+      - DB_RPC_TIMEOUT_SEC=2
       - PYTHONUNBUFFERED=TRUE
 
     
