@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import uuid
 
 # This set of lines are needed to import the gRPC stubs.
@@ -26,6 +27,11 @@ sys.path.insert(0, order_queue_grpc_path)
 import order_queue_pb2 as order_queue
 import order_queue_pb2_grpc as order_queue_grpc
 
+books_database_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/books_database'))
+sys.path.insert(0, books_database_grpc_path)
+import database_pb2 as database
+import database_pb2_grpc as database_grpc
+
 import grpc
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -38,6 +44,31 @@ logger = logging.getLogger(__name__)
 
 # Orchestrator-side vector clock store: order_id -> { service_name: counter }
 order_vc = {}
+
+
+def parse_db_targets():
+    raw = os.getenv("BOOKS_DB_TARGETS", "database1:50055,database2:50055,database3:50055")
+    return [addr.strip() for addr in raw.split(',') if addr.strip()] or [
+        "database1:50055",
+        "database2:50055",
+        "database3:50055",
+    ]
+
+
+def fetch_catalogue_from_db():
+    last_error = None
+    for target in parse_db_targets():
+        try:
+            with grpc.insecure_channel(target) as channel:
+                stub = database_grpc.BooksDatabaseStub(channel)
+                response = stub.Read(database.ReadRequest(key="catalogue"), timeout=3)
+                if response.found and response.value:
+                    return json.loads(response.value)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(f"Catalogue fetch failed from {target}: {exc}")
+
+    raise RuntimeError(f"Unable to load catalogue from database: {last_error}")
 
 
 def init_all_services(order_id, order_data):
@@ -428,7 +459,6 @@ def get_suggestions_for_route(book_titles):
 # For more information, see https://flask.palletsprojects.com/en/latest/
 from flask import Flask, request
 from flask_cors import CORS
-import json
 
 # Create a simple Flask app.
 app = Flask(__name__)
@@ -447,6 +477,13 @@ def index():
     return "Fraud detected: " + str(results.get('is_fraud'))
     """
     return {"status": "ok"}
+
+
+@app.route('/catalogue', methods=['GET'])
+def catalogue_route():
+    """Get the book catalogue from the quorum-backed database."""
+    return {'catalogue': fetch_catalogue_from_db()}
+
 
 @app.route('/suggestions', methods=['POST'])
 def suggestions_route():

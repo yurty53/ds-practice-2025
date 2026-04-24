@@ -74,10 +74,7 @@
 
     <script>
         const stored = localStorage.getItem('cart');
-        const items = stored ? JSON.parse(stored) : [
-            { name: "Book A", quantity: 1 },
-            { name: "Book B", quantity: 2 }
-        ];
+        const items = stored ? JSON.parse(stored) : [];
 
         const itemListElement = document.getElementById('itemList');
         items.forEach(item => {
@@ -87,8 +84,20 @@
             itemListElement.appendChild(li);
         });
 
+        if (items.length === 0) {
+            const li = document.createElement('li');
+            li.textContent = 'Your cart is empty.';
+            li.className = 'bg-gray-100 p-3 rounded-lg text-gray-500 italic';
+            itemListElement.appendChild(li);
+        }
+
         document.getElementById('checkoutForm').addEventListener('submit', async function(event) {
             event.preventDefault();
+
+            if (items.length === 0) {
+                alert('Your cart is empty. Please go back and add some books first.');
+                return;
+            }
 
             const formData = new FormData(event.target);
             const data = {

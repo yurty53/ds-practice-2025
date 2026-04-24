@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import grpc
 import logging
 from concurrent import futures
@@ -18,6 +19,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+DEFAULT_CATALOGUE = {
+    "Magical Realism": [
+        {"title": "100 Years of Solitude", "author": "Gabriel García Márquez"},
+        {"title": "Feast of the Goat", "author": "Mario Vargas Llosa"},
+        {"title": "The House of Spirits", "author": "Isabel Allende"},
+    ],
+    "Classic Literature": [
+        {"title": "Brothers Karamazov", "author": "Fyodor Dostoevsky"},
+        {"title": "Les Misérables", "author": "Victor Hugo"},
+        {"title": "The Iliad", "author": "Homer"},
+    ],
+    "Fantasy": [
+        {"title": "Lord of the Rings", "author": "J.R.R. Tolkien"},
+        {"title": "The Name of the Wind", "author": "Patrick Rothfuss"},
+        {"title": "The Chronicles of Narnia", "author": "C.S. Lewis"},
+    ],
+    "Sci-Fi": [
+        {"title": "Dune", "author": "Frank Herbert"},
+        {"title": "Neuromancer", "author": "William Gibson"},
+        {"title": "Foundation", "author": "Isaac Asimov"},
+    ],
+    "Literary Fiction": [
+        {"title": "Midnight's Children", "author": "Salman Rushdie"},
+        {"title": "God of Small Things", "author": "Arundhati Roy"},
+        {"title": "The Grapes of Wrath", "author": "John Steinbeck"},
+    ],
+}
+
+
+def seed_initial_catalogue(store):
+    """Populate the replica with the initial catalogue and stock values."""
+    store.local_write("catalogue", json.dumps(DEFAULT_CATALOGUE), 0)
+
+    for books in DEFAULT_CATALOGUE.values():
+        for book in books:
+            store.local_write(book["title"], "10", 0)
+
 # Parse peer addresses from environment variable
 # Format: "database2:50055,database3:50055"
 def parse_peers():
@@ -30,9 +68,11 @@ def parse_peers():
 class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
     def __init__(self, peer_addresses):
         self.store = KVStore()
+        seed_initial_catalogue(self.store)
         self.peers = peer_addresses
         node_id = os.getenv('NODE_ID', 'unknown')
-        logger.info(f"[{node_id}] Books Database started | peers={self.peers}")
+        total_books = sum(len(books) for books in DEFAULT_CATALOGUE.values())
+        logger.info(f"[{node_id}] Books Database started | peers={self.peers} | seeded_catalogue={total_books} books")
 
     # ── Local handlers (called by peer quorum functions) ──────────────────
 

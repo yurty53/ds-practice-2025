@@ -46,38 +46,24 @@
     </div>
 
     <script>
-        const CATALOGUE = {
-            "Magical Realism": [
-                { title: "100 Years of Solitude", author: "Gabriel García Márquez" },
-                { title: "Feast of the Goat", author: "Mario Vargas Llosa" },
-                { title: "The House of Spirits", author: "Isabel Allende" },
-            ],
-            "Classic Literature": [
-                { title: "Brothers Karamazov", author: "Fyodor Dostoevsky" },
-                { title: "Les Misérables", author: "Victor Hugo" },
-                { title: "The Iliad", author: "Homer" },
-            ],
-            "Fantasy": [
-                { title: "Lord of the Rings", author: "J.R.R. Tolkien" },
-                { title: "The Name of the Wind", author: "Patrick Rothfuss" },
-                { title: "The Chronicles of Narnia", author: "C.S. Lewis" },
-            ],
-            "Sci-Fi": [
-                { title: "Dune", author: "Frank Herbert" },
-                { title: "Neuromancer", author: "William Gibson" },
-                { title: "Foundation", author: "Isaac Asimov" },
-            ],
-            "Literary Fiction": [
-                { title: "Midnight's Children", author: "Salman Rushdie" },
-                { title: "God of Small Things", author: "Arundhati Roy" },
-                { title: "The Grapes of Wrath", author: "John Steinbeck" },
-            ],
-        };
-
+        let CATALOGUE = {};
         let cart = [];
 
-        function renderCatalogue() {
+        async function renderCatalogue() {
             const container = document.getElementById('catalogue');
+            container.innerHTML = '<p class="text-sm text-gray-500">Loading books from the database...</p>';
+
+            try {
+                const response = await fetch('http://localhost:8081/catalogue');
+                const result = await response.json();
+                CATALOGUE = result.catalogue || {};
+            } catch (err) {
+                console.error('Could not load catalogue:', err);
+                container.innerHTML = '<p class="text-sm text-red-500">Could not load the catalogue from the database.</p>';
+                return;
+            }
+
+            container.innerHTML = '';
             for (const [genre, books] of Object.entries(CATALOGUE)) {
                 const section = document.createElement('div');
                 section.className = 'mb-6';
