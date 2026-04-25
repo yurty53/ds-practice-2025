@@ -113,6 +113,8 @@ services:
       - MAX_DB_WRITE_RETRIES=5
       - DB_RPC_TIMEOUT_SEC=2
       - PYTHONUNBUFFERED=TRUE
+      - PAYMENT_HOST=payment
+      - PAYMENT_PORT=50061
 
   executor2:
     build:
@@ -133,6 +135,8 @@ services:
       - MAX_DB_WRITE_RETRIES=5
       - DB_RPC_TIMEOUT_SEC=2
       - PYTHONUNBUFFERED=TRUE
+      - PAYMENT_HOST=payment
+      - PAYMENT_PORT=50061
 
   executor3:
     build:
@@ -153,6 +157,9 @@ services:
       - MAX_DB_WRITE_RETRIES=5
       - DB_RPC_TIMEOUT_SEC=2
       - PYTHONUNBUFFERED=TRUE
+      - PAYMENT_HOST=payment
+      - PAYMENT_PORT=50061
+    
 
     
   database1:

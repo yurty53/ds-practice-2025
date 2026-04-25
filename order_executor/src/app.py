@@ -25,6 +25,11 @@ sys.path.insert(0, database_grpc_path)
 import database_pb2
 import database_pb2_grpc
 
+payment_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/payment'))
+sys.path.insert(0, payment_grpc_path)
+import payment_pb2
+import payment_pb2_grpc
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -107,6 +112,11 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
             f"| db_targets={self.db_targets} | retries={self.max_db_write_retries}"
         )
 
+    def _get_payment_target(self):
+        host = os.getenv("PAYMENT_HOST", "payment")
+        port = os.getenv("PAYMENT_PORT", "50061")
+        return f"{host}:{port}"
+
     def _normalize_quantity(self, item):
         # Proto3 defaults missing int32 fields to 0, so map missing/invalid to 1.
         if isinstance(item, dict):
@@ -134,8 +144,103 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
     def _is_cas_conflict(self, error_text):
         return "version mismatch" in (error_text or "").lower()
 
+    def run_2pc(self, transaction_id, db_target, key, new_value, expected_version, user_name):
+        """
+        Runs 2PC with database and payment as participants.
+        Returns True if all committed, False if aborted.
+        """
+        payment_target = self._get_payment_target()
+        votes = {}
+        vote_lock = threading.Lock()
+
+        def prepare_db():
+            try:
+                with grpc.insecure_channel(db_target) as channel:
+                    stub = database_pb2_grpc.BooksDatabaseStub(channel)
+                    resp = stub.Prepare(
+                        database_pb2.PrepareRequest(
+                            transaction_id=transaction_id,
+                            key=key,
+                            value=new_value,
+                            expected_version=expected_version,
+                        ),
+                        timeout=self.db_rpc_timeout_sec,
+                    )
+                    with vote_lock:
+                        votes['db'] = resp.vote_yes
+                    logger.info(f"[2PC][{transaction_id}] DB vote: {'YES' if resp.vote_yes else 'NO'}")
+            except Exception as e:
+                logger.warning(f"[2PC][{transaction_id}] DB Prepare failed: {e}")
+                with vote_lock:
+                    votes['db'] = False
+
+        def prepare_payment():
+            try:
+                with grpc.insecure_channel(payment_target) as channel:
+                    stub = payment_pb2_grpc.PaymentServiceStub(channel)
+                    resp = stub.Prepare(
+                        payment_pb2.PrepareRequest(
+                            transaction_id=transaction_id,
+                            user_name=user_name,
+                            amount=0.0,
+                        ),
+                        timeout=5.0,
+                    )
+                    with vote_lock:
+                        votes['payment'] = resp.vote_yes
+                    logger.info(f"[2PC][{transaction_id}] Payment vote: {'YES' if resp.vote_yes else 'NO'}")
+            except Exception as e:
+                logger.warning(f"[2PC][{transaction_id}] Payment Prepare failed: {e}")
+                with vote_lock:
+                    votes['payment'] = False
+
+        # Phase 1 — Prepare (parallel)
+        logger.info(f"[2PC][{transaction_id}] Phase 1: Prepare -> db={db_target}, payment={payment_target}")
+        t1 = threading.Thread(target=prepare_db)
+        t2 = threading.Thread(target=prepare_payment)
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        all_yes = votes.get('db') and votes.get('payment')
+
+        # Phase 2 — Commit or Abort (parallel)
+        if all_yes:
+            logger.info(f"[2PC][{transaction_id}] Phase 2: All voted YES — sending Commit")
+            participants = [
+                (db_target, database_pb2_grpc.BooksDatabaseStub,
+                 database_pb2.CommitRequest(transaction_id=transaction_id)),
+                (payment_target, payment_pb2_grpc.PaymentServiceStub,
+                 payment_pb2.CommitRequest(transaction_id=transaction_id)),
+            ]
+        else:
+            logger.info(f"[2PC][{transaction_id}] Phase 2: ABORT — votes={votes}")
+            participants = [
+                (db_target, database_pb2_grpc.BooksDatabaseStub,
+                 database_pb2.AbortRequest(transaction_id=transaction_id)),
+                (payment_target, payment_pb2_grpc.PaymentServiceStub,
+                 payment_pb2.AbortRequest(transaction_id=transaction_id)),
+            ]
+
+        def send_phase2(target, stub_class, req):
+            try:
+                with grpc.insecure_channel(target) as channel:
+                    stub_class(channel).Commit(req, timeout=5.0) if all_yes else stub_class(channel).Abort(req, timeout=5.0)
+                logger.info(f"[2PC][{transaction_id}] {'Commit' if all_yes else 'Abort'} sent to {target}")
+            except Exception as e:
+                logger.warning(f"[2PC][{transaction_id}] Phase 2 to {target} failed: {e}")
+
+        threads = [threading.Thread(target=send_phase2, args=(t, s, r)) for t, s, r in participants]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        return all_yes
+
     def execute_order(self, order):
         items = self._get_order_items(order)
+        order_id = getattr(order, 'order_id', 'unknown')
+        user_name = getattr(order, 'user_name', '')
 
         for item in items:
             item_name = self._get_item_name(item)
@@ -148,6 +253,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
             for attempt in range(1, self.max_db_write_retries + 1):
                 db_target = random.choice(self.db_targets)
 
+                # Read current stock
                 try:
                     with grpc.insecure_channel(db_target) as channel:
                         db_stub = database_pb2_grpc.BooksDatabaseStub(channel)
@@ -180,44 +286,28 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                     return False
 
                 new_stock = current_stock - quantity
+                transaction_id = f"{order_id}-{item_name}-{attempt}"
 
-                try:
-                    with grpc.insecure_channel(db_target) as channel:
-                        db_stub = database_pb2_grpc.BooksDatabaseStub(channel)
-                        write_resp = db_stub.Write(
-                            database_pb2.WriteRequest(
-                                key=item_name,
-                                value=str(new_stock),
-                                expected_version=read_resp.version,
-                            ),
-                            timeout=self.db_rpc_timeout_sec,
-                        )
-                except Exception as exc:
-                    logger.warning(
-                        f"DB Write failed for item={item_name} target={db_target} "
-                        f"attempt={attempt}/{self.max_db_write_retries}: {exc}"
-                    )
-                    time.sleep(random.uniform(0.05, 0.2))
-                    continue
+                success = self.run_2pc(
+                    transaction_id=transaction_id,
+                    db_target=db_target,
+                    key=item_name,
+                    new_value=str(new_stock),
+                    expected_version=read_resp.version,
+                    user_name=user_name,
+                )
 
-                if write_resp.success:
+                if success:
                     logger.info(
-                        f"Stock updated for {item_name}: {current_stock} -> {new_stock} "
-                        f"(version={write_resp.version})"
+                        f"[{order_id}] Stock committed: {item_name} {current_stock} -> {new_stock}"
                     )
                     break
 
-                if self._is_cas_conflict(write_resp.error):
-                    logger.info(
-                        f"CAS conflict for {item_name} on attempt {attempt}/{self.max_db_write_retries}; retrying"
-                    )
-                    time.sleep(random.uniform(0.05, 0.2))
-                    continue
-
-                logger.warning(f"Write rejected for {item_name}: {write_resp.error}")
-                return False
+                # Could be CAS conflict or DB vote NO — retry
+                logger.info(f"[{order_id}] 2PC failed for {item_name} attempt={attempt}/{self.max_db_write_retries}, retrying")
+                time.sleep(random.uniform(0.05, 0.2))
             else:
-                logger.warning(f"Failed to update stock for {item_name} after retries")
+                logger.warning(f"[{order_id}] Failed to commit {item_name} after {self.max_db_write_retries} attempts")
                 return False
 
         return True
