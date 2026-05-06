@@ -144,7 +144,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
     def _is_cas_conflict(self, error_text):
         return "version mismatch" in (error_text or "").lower()
 
-    def run_2pc(self, transaction_id, db_target, key, new_value, expected_version, user_name):
+    def run_2pc(self, transaction_id, db_target, key, new_value, expected_version, user_name, payment_amount):
         """
         Runs 2PC with database and payment as participants.
         Returns True if all committed, False if aborted.
@@ -182,7 +182,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                         payment_pb2.PrepareRequest(
                             transaction_id=transaction_id,
                             user_name=user_name,
-                            amount=0.0,
+                            amount=payment_amount,
                         ),
                         timeout=5.0,
                     )
@@ -295,6 +295,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                     new_value=str(new_stock),
                     expected_version=read_resp.version,
                     user_name=user_name,
+                    payment_amount=float(quantity),
                 )
 
                 if success:
