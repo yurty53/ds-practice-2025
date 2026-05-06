@@ -3,6 +3,7 @@ import os
 import json
 import grpc
 import logging
+import threading
 from concurrent import futures
 
 FILE = __file__ if '__file__' in dir() else os.getenv('PYTHONFILE', '')
@@ -74,6 +75,24 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
         total_books = sum(len(books) for books in DEFAULT_CATALOGUE.values())
         logger.info(f"[{node_id}] Books Database started | peers={self.peers} | seeded_catalogue={total_books} books")
 
+        # ── 2PC state ─────────────────────────────────────────────────────
+        # staged_writes: { transaction_id → {key, value, expected_version} }
+        self._staged_writes = {}
+ 
+        # locks: { key → transaction_id }
+        # Prevents two concurrent transactions from preparing a write to the
+        # same key at the same time.
+        self._locks = {}
+ 
+        # Single mutex protecting both dicts
+        self._2pc_lock = threading.Lock()
+ 
+        total_books = sum(len(books) for books in DEFAULT_CATALOGUE.values())
+        logger.info(
+            f"[{node_id}] Books Database started | peers={self.peers} "
+            f"| seeded_catalogue={total_books} books"
+        )
+
     # ── Local handlers (called by peer quorum functions) ──────────────────
 
     def LocalRead(self, request, context):
@@ -144,7 +163,134 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))
             return database_pb2.WriteResponse(success=False, version=0, error=str(exc))
-
+        
+        
+    # ── 2PC handlers ───────────────────────────────────────────────────────
+ 
+    def Prepare(self, request, context):
+        """
+        Phase 1 of 2PC — stage the write without applying it.
+ 
+        VOTE_NO  if the key is already locked by another in-progress transaction.
+        VOTE_YES otherwise: stage the write in _staged_writes and lock the key.
+        Nothing touches the real KV store yet.
+        """
+        tid     = request.transaction_id
+        key     = request.key
+        node_id = os.getenv('NODE_ID', 'unknown')
+ 
+        with self._2pc_lock:
+            existing_tid = self._locks.get(key)
+            if existing_tid is not None and existing_tid != tid:
+                logger.warning(
+                    f"[{node_id}] [2PC] Prepare VOTE_NO | tid={tid} "
+                    f"key='{key}' already locked by tid={existing_tid}"
+                )
+                return database_pb2.PrepareResponse(
+                    vote_yes=False,
+                    error=f"Key '{key}' is locked by transaction {existing_tid}"
+                )
+ 
+            self._staged_writes[tid] = {
+                "key":              key,
+                "value":            request.value,
+                "expected_version": request.expected_version,
+            }
+            self._locks[key] = tid
+ 
+        logger.info(
+            f"[{node_id}] [2PC] Prepare VOTE_YES | tid={tid} "
+            f"key='{key}' expected_version={request.expected_version}"
+        )
+        return database_pb2.PrepareResponse(vote_yes=True, error="")
+ 
+    def Commit(self, request, context):
+        """
+        Phase 2 of 2PC — happy path.
+ 
+        Move the staged write into the real KV store via quorum_write so that
+        all replicas are updated. Then release the lock and clean up staging.
+        """
+        tid     = request.transaction_id
+        node_id = os.getenv('NODE_ID', 'unknown')
+ 
+        with self._2pc_lock:
+            staged = self._staged_writes.get(tid)
+ 
+        if staged is None:
+            logger.warning(
+                f"[{node_id}] [2PC] Commit called but no staged write for tid={tid}"
+            )
+            return database_pb2.CommitResponse(success=False)
+ 
+        key              = staged["key"]
+        value            = staged["value"]
+        expected_version = staged["expected_version"]
+ 
+        logger.info(
+            f"[{node_id}] [2PC] Commit | tid={tid} "
+            f"key='{key}' expected_version={expected_version}"
+        )
+ 
+        # Apply via quorum so all replicas are updated
+        try:
+            success, new_version, error = quorum_write(
+                key=key,
+                value=value,
+                expected_version=expected_version,
+                local_store=self.store,
+                peer_addresses=self.peers,
+            )
+        except Exception as exc:
+            logger.error(f"[{node_id}] [2PC] Commit quorum_write failed: {exc}")
+            success, error = False, str(exc)
+ 
+        # Release lock and clean up staging regardless of quorum outcome
+        with self._2pc_lock:
+            self._staged_writes.pop(tid, None)
+            if self._locks.get(key) == tid:
+                del self._locks[key]
+ 
+        if success:
+            logger.info(
+                f"[{node_id}] [2PC] Commit SUCCESS | tid={tid} "
+                f"key='{key}' new_version={new_version}"
+            )
+        else:
+            logger.error(
+                f"[{node_id}] [2PC] Commit FAILED (quorum error) | tid={tid} "
+                f"key='{key}' error={error}"
+            )
+ 
+        return database_pb2.CommitResponse(success=success)
+ 
+    def Abort(self, request, context):
+        """
+        Phase 2 of 2PC — abort path.
+ 
+        Discard the staged write and release the lock.
+        Nothing is written to the real KV store.
+        """
+        tid     = request.transaction_id
+        node_id = os.getenv('NODE_ID', 'unknown')
+ 
+        with self._2pc_lock:
+            staged = self._staged_writes.pop(tid, None)
+            if staged is not None:
+                key = staged["key"]
+                if self._locks.get(key) == tid:
+                    del self._locks[key]
+                logger.info(
+                    f"[{node_id}] [2PC] Abort | tid={tid} "
+                    f"key='{key}' — staged write discarded"
+                )
+            else:
+                logger.warning(
+                    f"[{node_id}] [2PC] Abort called but no staged write for tid={tid}"
+                )
+ 
+        return database_pb2.AbortResponse(success=True)
+ 
 
 def serve():
     peer_addresses = parse_peers()
