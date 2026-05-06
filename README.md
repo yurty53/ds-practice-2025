@@ -8,6 +8,8 @@ This repository contains the implementation of a distributed bookstore system fo
 - **[Testing Guide CP1](docs/TESTING_GUIDE_CP1.md)** - Test scenarios (Checkpoint #1)
 - **[Architecture CP2](docs/ARCHITECTURE_CP2.md)** - System architecture and design (Checkpoint #2)
 - **[Testing Guide CP2](docs/TESTING_GUIDE_CP2.md)** - Test scenarios (Checkpoint #2)
+- **[Architecture CP3](docs/ARCHITECTURE_CP3.md)** - System architecture and design (Checkpoint #3)
+- **[Testing Guide CP3](docs/TESTING_GUIDE_CP3.md)** - Demo and validation steps (Checkpoint #3)
 - **[Utils](utils/README.md)** - Protocol Buffer specifications
 
 ## System Architecture
@@ -57,6 +59,10 @@ The system consists of 9 service instances communicating via REST and gRPC proto
 9. **Executor 3** (Host 50057 -> container 50050)
    - Order execution replica
    - Participates in Bully election and heartbeat checks
+
+10. **Payment** (Port 50061)
+   - gRPC participant for the 2PC checkout flow
+   - Persists staged transactions and supports crash recovery
 
 ### Communication Protocols
 
