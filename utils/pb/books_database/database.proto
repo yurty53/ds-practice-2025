@@ -5,6 +5,9 @@ service BooksDatabase {
   rpc Write(WriteRequest) returns (WriteResponse);
   rpc LocalRead(ReadRequest) returns (ReadResponse);
   rpc LocalWrite(WriteRequest) returns (WriteResponse);
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+  rpc Commit(CommitRequest) returns (CommitResponse);
+  rpc Abort(AbortRequest) returns (AbortResponse);
 }
 
 message ReadRequest {
@@ -27,4 +30,32 @@ message WriteResponse {
   bool success = 1;
   int64 version = 2;
   string error = 3;
+}
+
+message PrepareRequest {
+  string transaction_id = 1;
+  string key = 2;
+  string value = 3;
+  int64 expected_version = 4;
+}
+
+message PrepareResponse {
+  bool vote_yes = 1;
+  string error = 2;
+}
+
+message CommitRequest {
+  string transaction_id = 1;
+}
+
+message CommitResponse {
+  bool success = 1;
+}
+
+message AbortRequest {
+  string transaction_id = 1;
+}
+
+message AbortResponse {
+  bool success = 1;
 }
