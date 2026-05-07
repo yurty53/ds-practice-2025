@@ -72,6 +72,21 @@ This checkpoint extends the distributed bookstore with a payment participant and
 | Executor 3 | 50057 | Coordinator candidate |
 | Payment | 50061 | 2PC participant |
 
+## Coordinator Failure Analysis
+
+**Case 1 — Executor crashes after Phase 1 (all voted YES, no Commit sent yet)**
+Both database and payment are in PREPARED state, holding locks on their resources. Without a Commit or Abort signal from the coordinator, they block indefinitely. No participant can safely self-abort because the other may have already committed — this is the fundamental blocking problem of 2PC.
+
+**Case 2 — Executor crashes mid Phase 2 (e.g. Commit reached database but not payment)**
+The database has committed and updated stock. The payment service is still in PREPARED state. The system is now inconsistent — one participant committed, the other did not.
+
+**Proposed recovery solution**
+Before sending any Phase 2 messages, the executor writes the transaction decision (COMMIT or ABORT) along with the transaction ID to a persistent WAL (write-ahead log) or the order queue. When the executor crashes and Bully election fires, the newly elected leader reads the WAL on startup. For any transaction found in DECIDED state, it re-sends Commit or Abort to all participants. Participants handle duplicate Commit/Abort idempotently (already implemented in the payment service). This guarantees that once a decision is made it will eventually reach all participants, even across coordinator failures.
+
+## Bonus — Concurrent Write Handling
+
+Concurrent writes to the same book are handled via optimistic concurrency control using version numbers (Compare-and-Swap). Each Read returns the current version alongside the stock value. A Write only succeeds if the submitted `expected_version` matches the current version in the database. If two orders read the same version and both attempt a Write, only one succeeds — the other receives a version mismatch error. The executor detects this conflict and retries from a fresh Read, ensuring correctness without locking. This is implemented in `books_database/src/app.py` (Write RPC) and `order_executor/src/app.py` (`_is_cas_conflict` + retry loop).
+
 ## Demo Points
 
 - **Happy path**: approved order, DB stock updated everywhere, payment executed.
