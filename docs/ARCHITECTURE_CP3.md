@@ -6,7 +6,7 @@ This checkpoint extends the distributed bookstore with a payment participant and
 
 ## Updated Architecture
 
-![Checkpoint 3 diagrams](./Checkpoint3_diagrams.drawio.png)
+![Checkpoint 3 diagrams](./Checkpoint3_diagrams.png)
 
 ### Main Changes
 
