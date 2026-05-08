@@ -159,8 +159,21 @@ services:
       - PYTHONUNBUFFERED=TRUE
       - PAYMENT_HOST=payment
       - PAYMENT_PORT=50061
-    
 
+  payment:
+    build:
+      context: ./
+      dockerfile: ./payment/Dockerfile
+    container_name: payment
+    ports:
+      - "50061:50061"
+    environment:
+      - PYTHONUNBUFFERED=TRUE
+      - PYTHONFILE=/app/payment/src/app.py
+      - PAYMENT_PORT=50061
+    volumes:
+      - ./utils:/app/utils
+      - ./payment/src:/app/payment/src
     
   database1:
     build:
