@@ -5,6 +5,7 @@ package order_queue;
 service OrderQueue {
     rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
     rpc Dequeue(DequeueRequest) returns (DequeueResponse);
+    rpc GetLeader(GetLeaderRequest) returns (GetLeaderResponse);
 }
 
 message OrderItem {
@@ -27,9 +28,17 @@ message EnqueueResponse {
     bool success = 1;
 }
 
-message DequeueRequest {}
+message DequeueRequest {
+    string caller_id = 1;   // optional; set by executor to announce itself as leader
+}
 
 message DequeueResponse {
     bool success = 1;    // false means queue was empty
     Order order = 2;
+}
+
+message GetLeaderRequest {}
+
+message GetLeaderResponse {
+    string leader_id = 1;
 }

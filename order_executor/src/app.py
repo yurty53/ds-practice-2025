@@ -433,7 +433,9 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
             try:
                 with grpc.insecure_channel('order_queue:50054') as channel:
                     queue_stub = order_queue_grpc.OrderQueueStub(channel)
-                    resp = queue_stub.Dequeue(order_queue.DequeueRequest(), timeout=2)
+                    resp = queue_stub.Dequeue(
+                        order_queue.DequeueRequest(caller_id=f"executor{self.id}"), timeout=2
+                    )
 
                 if resp.success:
                     order = resp.order

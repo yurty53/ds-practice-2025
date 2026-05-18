@@ -44,6 +44,11 @@ class OrderQueueStub(object):
                 request_serializer=order__queue__pb2.DequeueRequest.SerializeToString,
                 response_deserializer=order__queue__pb2.DequeueResponse.FromString,
                 _registered_method=True)
+        self.GetLeader = channel.unary_unary(
+                '/order_queue.OrderQueue/GetLeader',
+                request_serializer=order__queue__pb2.GetLeaderRequest.SerializeToString,
+                response_deserializer=order__queue__pb2.GetLeaderResponse.FromString,
+                _registered_method=True)
 
 
 class OrderQueueServicer(object):
@@ -61,6 +66,12 @@ class OrderQueueServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetLeader(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_OrderQueueServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -73,6 +84,11 @@ def add_OrderQueueServicer_to_server(servicer, server):
                     servicer.Dequeue,
                     request_deserializer=order__queue__pb2.DequeueRequest.FromString,
                     response_serializer=order__queue__pb2.DequeueResponse.SerializeToString,
+            ),
+            'GetLeader': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetLeader,
+                    request_deserializer=order__queue__pb2.GetLeaderRequest.FromString,
+                    response_serializer=order__queue__pb2.GetLeaderResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -129,6 +145,33 @@ class OrderQueue(object):
             '/order_queue.OrderQueue/Dequeue',
             order__queue__pb2.DequeueRequest.SerializeToString,
             order__queue__pb2.DequeueResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetLeader(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/order_queue.OrderQueue/GetLeader',
+            order__queue__pb2.GetLeaderRequest.SerializeToString,
+            order__queue__pb2.GetLeaderResponse.FromString,
             options,
             channel_credentials,
             insecure,

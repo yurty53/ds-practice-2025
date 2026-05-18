@@ -21,6 +21,7 @@ class OrderQueueService(order_queue_grpc.OrderQueueServicer):
     def __init__(self):
         self.queue = []
         self.lock = threading.Lock()
+        self.current_leader = ""
 
     def Enqueue(self, request, context):
         with self.lock:
@@ -30,12 +31,18 @@ class OrderQueueService(order_queue_grpc.OrderQueueServicer):
 
     def Dequeue(self, request, context):
         with self.lock:
+            if request.caller_id:
+                self.current_leader = request.caller_id
             if not self.queue:
                 logger.info("Dequeue called but queue is empty")
                 return order_queue.DequeueResponse(success=False)
             order = self.queue.pop(0)
             logger.info(f"Dequeued order {order.order_id} | queue size: {len(self.queue)}")
             return order_queue.DequeueResponse(success=True, order=order)
+
+    def GetLeader(self, request, context):
+        with self.lock:
+            return order_queue.GetLeaderResponse(leader_id=self.current_leader)
 
 
 def serve():

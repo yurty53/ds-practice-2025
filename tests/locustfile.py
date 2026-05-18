@@ -30,22 +30,27 @@ from locust import HttpUser, task, between, events, constant
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
-# Books that are known to be in the catalogue (from project setup)
+# Books that are known to be in the catalogue (from books_database/src/app.py DEFAULT_CATALOGUE)
 CATALOGUE_BOOKS = [
-    "To Kill a Mockingbird",
-    "1984",
-    "The Great Gatsby",
-    "One Hundred Years of Solitude",
-    "Brave New World",
-    "The Catcher in the Rye",
-    "The Hobbit",
-    "Fahrenheit 451",
-    "Animal Farm",
-    "The Lord of the Flies",
+    "100 Years of Solitude",
+    "Feast of the Goat",
+    "The House of Spirits",
+    "Brothers Karamazov",
+    "Les Misérables",
+    "The Iliad",
+    "Lord of the Rings",
+    "The Name of the Wind",
+    "The Chronicles of Narnia",
+    "Dune",
+    "Neuromancer",
+    "Foundation",
+    "Midnight's Children",
+    "God of Small Things",
+    "The Grapes of Wrath",
 ]
 
 # A single book used to create *conflicting* orders
-CONFLICT_BOOK = "1984"
+CONFLICT_BOOK = "Dune"
 
 # Card numbers / expiry dates that trigger fraud detection in the project
 # (the fraud service flags cards expiring before 2024 as expired)

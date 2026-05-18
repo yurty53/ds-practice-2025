@@ -569,6 +569,18 @@ def checkout(order_data):
     return order_status_response
 
 
+@app.route('/leader', methods=['GET'])
+def leader_route():
+    """Return the current leader executor container name."""
+    try:
+        with grpc.insecure_channel('order_queue:50054') as channel:
+            stub = order_queue_grpc.OrderQueueStub(channel)
+            resp = stub.GetLeader(order_queue.GetLeaderRequest(), timeout=3)
+            return {'leader': resp.leader_id or 'unknown'}
+    except Exception as exc:
+        return {'leader': 'unknown', 'error': str(exc)}, 500
+
+
 @app.route('/checkout', methods=['POST'])
 def checkout_route():
     return checkout(json.loads(request.data))
