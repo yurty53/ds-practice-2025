@@ -170,15 +170,16 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
     def Prepare(self, request, context):
         """
         Phase 1 of 2PC — stage the write without applying it.
- 
-        VOTE_NO  if the key is already locked by another in-progress transaction.
+
+        VOTE_NO  if the key is already locked by another in-progress transaction
+                 or if expected_version does not match the current stored version (CAS guard).
         VOTE_YES otherwise: stage the write in _staged_writes and lock the key.
         Nothing touches the real KV store yet.
         """
         tid     = request.transaction_id
         key     = request.key
         node_id = os.getenv('NODE_ID', 'unknown')
- 
+
         with self._2pc_lock:
             existing_tid = self._locks.get(key)
             if existing_tid is not None and existing_tid != tid:
@@ -190,14 +191,26 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
                     vote_yes=False,
                     error=f"Key '{key}' is locked by transaction {existing_tid}"
                 )
- 
+
+            # CAS guard: reject if the caller's expected version is stale.
+            _, current_version = self.store.local_read(key)
+            if current_version != request.expected_version:
+                logger.warning(
+                    f"[{node_id}] [2PC] Prepare VOTE_NO | tid={tid} key='{key}' "
+                    f"version mismatch: expected={request.expected_version} current={current_version}"
+                )
+                return database_pb2.PrepareResponse(
+                    vote_yes=False,
+                    error=f"Version mismatch: expected {request.expected_version}, got {current_version}"
+                )
+
             self._staged_writes[tid] = {
                 "key":              key,
                 "value":            request.value,
                 "expected_version": request.expected_version,
             }
             self._locks[key] = tid
- 
+
         logger.info(
             f"[{node_id}] [2PC] Prepare VOTE_YES | tid={tid} "
             f"key='{key}' expected_version={request.expected_version}"
@@ -207,50 +220,47 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
     def Commit(self, request, context):
         """
         Phase 2 of 2PC — happy path.
- 
-        Move the staged write into the real KV store via quorum_write so that
-        all replicas are updated. Then release the lock and clean up staging.
+
+        All replicas received Prepare, so each applies the staged write locally
+        via local_write (no further fan-out needed). Release the lock and clean
+        up staging afterwards. Sets gRPC status ABORTED on a version mismatch so
+        the coordinator can distinguish a CAS conflict from other failures.
         """
         tid     = request.transaction_id
         node_id = os.getenv('NODE_ID', 'unknown')
- 
+
         with self._2pc_lock:
             staged = self._staged_writes.get(tid)
- 
+
         if staged is None:
             logger.warning(
                 f"[{node_id}] [2PC] Commit called but no staged write for tid={tid}"
             )
             return database_pb2.CommitResponse(success=False)
- 
+
         key              = staged["key"]
         value            = staged["value"]
         expected_version = staged["expected_version"]
- 
+
         logger.info(
             f"[{node_id}] [2PC] Commit | tid={tid} "
             f"key='{key}' expected_version={expected_version}"
         )
- 
-        # Apply via quorum so all replicas are updated
-        try:
-            success, new_version, error = quorum_write(
-                key=key,
-                value=value,
-                expected_version=expected_version,
-                local_store=self.store,
-                peer_addresses=self.peers,
-            )
-        except Exception as exc:
-            logger.error(f"[{node_id}] [2PC] Commit quorum_write failed: {exc}")
-            success, error = False, str(exc)
- 
-        # Release lock and clean up staging regardless of quorum outcome
+
+        # Apply locally — version was already validated at Prepare time and the
+        # key has been locked since, so a mismatch here is unexpected but handled.
+        success, new_version = self.store.local_write(key, value, expected_version)
+
+        if not success:
+            context.set_code(grpc.StatusCode.ABORTED)
+            context.set_details(f"Version mismatch at commit: key='{key}'")
+
+        # Release lock and clean up staging regardless of outcome
         with self._2pc_lock:
             self._staged_writes.pop(tid, None)
             if self._locks.get(key) == tid:
                 del self._locks[key]
- 
+
         if success:
             logger.info(
                 f"[{node_id}] [2PC] Commit SUCCESS | tid={tid} "
@@ -258,10 +268,9 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
             )
         else:
             logger.error(
-                f"[{node_id}] [2PC] Commit FAILED (quorum error) | tid={tid} "
-                f"key='{key}' error={error}"
+                f"[{node_id}] [2PC] Commit FAILED (version mismatch) | tid={tid} key='{key}'"
             )
- 
+
         return database_pb2.CommitResponse(success=success)
  
     def Abort(self, request, context):

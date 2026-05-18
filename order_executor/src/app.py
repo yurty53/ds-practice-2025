@@ -141,21 +141,28 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
             return order.get("items", [])
         return order.items
 
-    def _is_cas_conflict(self, error_text):
-        return "version mismatch" in (error_text or "").lower()
+    def _is_cas_conflict(self, exc):
+        """Return True when exc is a gRPC ABORTED error (version mismatch at DB)."""
+        return isinstance(exc, grpc.RpcError) and exc.code() == grpc.StatusCode.ABORTED
 
-    def run_2pc(self, transaction_id, db_target, key, new_value, expected_version, user_name, payment_amount):
+    def run_2pc(self, transaction_id, db_targets, key, new_value, expected_version, user_name, payment_amount):
         """
-        Runs 2PC with database and payment as participants.
-        Returns True if all committed, False if aborted.
+        Runs 2PC with all DB replicas and payment as participants.
+
+        Phase 1: Prepare is sent to every DB replica and to payment in parallel.
+                 All participants must vote YES; a single NO causes an Abort.
+        Phase 2: Commit (or Abort) is sent to every participant in parallel.
+                 Each DB replica applies the write locally (no further fan-out).
+
+        Returns True if all participants committed, False otherwise.
         """
         payment_target = self._get_payment_target()
         votes = {}
         vote_lock = threading.Lock()
 
-        def prepare_db():
+        def prepare_db(target):
             try:
-                with grpc.insecure_channel(db_target) as channel:
+                with grpc.insecure_channel(target) as channel:
                     stub = database_pb2_grpc.BooksDatabaseStub(channel)
                     resp = stub.Prepare(
                         database_pb2.PrepareRequest(
@@ -167,12 +174,15 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                         timeout=self.db_rpc_timeout_sec,
                     )
                     with vote_lock:
-                        votes['db'] = resp.vote_yes
-                    logger.info(f"[2PC][{transaction_id}] DB vote: {'YES' if resp.vote_yes else 'NO'}")
+                        votes[f'db:{target}'] = resp.vote_yes
+                    logger.info(
+                        f"[2PC][{transaction_id}] DB {target} vote: {'YES' if resp.vote_yes else 'NO'}"
+                        + (f" ({resp.error})" if not resp.vote_yes and resp.error else "")
+                    )
             except Exception as e:
-                logger.warning(f"[2PC][{transaction_id}] DB Prepare failed: {e}")
+                logger.warning(f"[2PC][{transaction_id}] DB Prepare to {target} failed: {e}")
                 with vote_lock:
-                    votes['db'] = False
+                    votes[f'db:{target}'] = False
 
         def prepare_payment():
             try:
@@ -194,38 +204,51 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                 with vote_lock:
                     votes['payment'] = False
 
-        # Phase 1 — Prepare (parallel)
-        logger.info(f"[2PC][{transaction_id}] Phase 1: Prepare -> db={db_target}, payment={payment_target}")
-        t1 = threading.Thread(target=prepare_db)
-        t2 = threading.Thread(target=prepare_payment)
-        t1.start(); t2.start()
-        t1.join(); t2.join()
+        # Phase 1 — all DB replicas + payment in parallel
+        logger.info(
+            f"[2PC][{transaction_id}] Phase 1: Prepare -> db_targets={db_targets}, payment={payment_target}"
+        )
+        threads = [threading.Thread(target=prepare_db, args=(t,)) for t in db_targets]
+        threads.append(threading.Thread(target=prepare_payment))
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
 
-        all_yes = votes.get('db') and votes.get('payment')
+        all_db_yes = all(votes.get(f'db:{t}', False) for t in db_targets)
+        all_yes = all_db_yes and votes.get('payment', False)
 
-        # Phase 2 — Commit or Abort (parallel)
+        # Phase 2 — Commit or Abort sent to all participants in parallel
         if all_yes:
             logger.info(f"[2PC][{transaction_id}] Phase 2: All voted YES — sending Commit")
-            participants = [
-                (db_target, database_pb2_grpc.BooksDatabaseStub,
-                 database_pb2.CommitRequest(transaction_id=transaction_id)),
-                (payment_target, payment_pb2_grpc.PaymentServiceStub,
-                 payment_pb2.CommitRequest(transaction_id=transaction_id)),
-            ]
+            db_reqs = [(t, database_pb2_grpc.BooksDatabaseStub,
+                        database_pb2.CommitRequest(transaction_id=transaction_id)) for t in db_targets]
+            pay_req = [(payment_target, payment_pb2_grpc.PaymentServiceStub,
+                        payment_pb2.CommitRequest(transaction_id=transaction_id))]
         else:
             logger.info(f"[2PC][{transaction_id}] Phase 2: ABORT — votes={votes}")
-            participants = [
-                (db_target, database_pb2_grpc.BooksDatabaseStub,
-                 database_pb2.AbortRequest(transaction_id=transaction_id)),
-                (payment_target, payment_pb2_grpc.PaymentServiceStub,
-                 payment_pb2.AbortRequest(transaction_id=transaction_id)),
-            ]
+            db_reqs = [(t, database_pb2_grpc.BooksDatabaseStub,
+                        database_pb2.AbortRequest(transaction_id=transaction_id)) for t in db_targets]
+            pay_req = [(payment_target, payment_pb2_grpc.PaymentServiceStub,
+                        payment_pb2.AbortRequest(transaction_id=transaction_id))]
+
+        participants = db_reqs + pay_req
 
         def send_phase2(target, stub_class, req):
             try:
                 with grpc.insecure_channel(target) as channel:
-                    stub_class(channel).Commit(req, timeout=5.0) if all_yes else stub_class(channel).Abort(req, timeout=5.0)
+                    if all_yes:
+                        stub_class(channel).Commit(req, timeout=5.0)
+                    else:
+                        stub_class(channel).Abort(req, timeout=5.0)
                 logger.info(f"[2PC][{transaction_id}] {'Commit' if all_yes else 'Abort'} sent to {target}")
+            except grpc.RpcError as e:
+                if self._is_cas_conflict(e):
+                    logger.warning(
+                        f"[2PC][{transaction_id}] CAS conflict (ABORTED) at {target} during Commit"
+                    )
+                else:
+                    logger.warning(f"[2PC][{transaction_id}] Phase 2 to {target} failed: {e}")
             except Exception as e:
                 logger.warning(f"[2PC][{transaction_id}] Phase 2 to {target} failed: {e}")
 
@@ -251,11 +274,12 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                 return False
 
             for attempt in range(1, self.max_db_write_retries + 1):
-                db_target = random.choice(self.db_targets)
+                # Use a random replica for the quorum-read entry point.
+                read_target = random.choice(self.db_targets)
 
-                # Read current stock
+                # Read current stock (quorum read handled inside the DB service)
                 try:
-                    with grpc.insecure_channel(db_target) as channel:
+                    with grpc.insecure_channel(read_target) as channel:
                         db_stub = database_pb2_grpc.BooksDatabaseStub(channel)
                         read_resp = db_stub.Read(
                             database_pb2.ReadRequest(key=item_name),
@@ -263,7 +287,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                         )
                 except Exception as exc:
                     logger.warning(
-                        f"DB Read failed for item={item_name} target={db_target} "
+                        f"DB Read failed for item={item_name} target={read_target} "
                         f"attempt={attempt}/{self.max_db_write_retries}: {exc}"
                     )
                     time.sleep(random.uniform(0.05, 0.2))
@@ -290,7 +314,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
 
                 success = self.run_2pc(
                     transaction_id=transaction_id,
-                    db_target=db_target,
+                    db_targets=self.db_targets,
                     key=item_name,
                     new_value=str(new_stock),
                     expected_version=read_resp.version,

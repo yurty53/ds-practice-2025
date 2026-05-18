@@ -37,13 +37,17 @@ This checkpoint extends the distributed bookstore with a payment participant and
 ## Two-Phase Commit Flow
 
 1. The coordinator receives a completed order from the queue.
-2. It sends Prepare to the Books Database and Payment Service in parallel.
-3. The Books Database locks the book key and stores the staged write.
+2. It sends Prepare to **all three Books Database replicas** and the Payment Service in parallel.
+3. Each Books Database replica validates the expected version (CAS guard), locks the book key, and stores the staged write locally.
 4. The Payment Service writes the staged payment intent to its JSON recovery file.
-5. If both participants vote YES, the coordinator sends Commit to both.
-6. The Books Database commits the write through quorum replication.
+5. If all participants vote YES, the coordinator sends Commit to all of them.
+6. Each Books Database replica applies the staged write locally (`local_write`). No quorum fan-out is needed here because all replicas already participated in Prepare.
 7. The Payment Service logs the execution and clears its staged state.
-8. If any participant votes NO, the coordinator sends Abort to both.
+8. If any participant votes NO, the coordinator sends Abort to all participants.
+
+### Transaction ID format
+
+Each 2PC transaction is identified by `"{order_id}-{item_name}-{attempt}"`. Including the retry attempt number ensures that a failed-and-retried round starts a fresh transaction ID, so no replica can confuse a stale staged write from a previous attempt with the current one.
 
 ## Recovery and Consistency
 
@@ -83,9 +87,21 @@ The database has committed and updated stock. The payment service is still in PR
 **Proposed recovery solution**
 Before sending any Phase 2 messages, the executor writes the transaction decision (COMMIT or ABORT) along with the transaction ID to a persistent WAL (write-ahead log) or the order queue. When the executor crashes and Bully election fires, the newly elected leader reads the WAL on startup. For any transaction found in DECIDED state, it re-sends Commit or Abort to all participants. Participants handle duplicate Commit/Abort idempotently (already implemented in the payment service). This guarantees that once a decision is made it will eventually reach all participants, even across coordinator failures.
 
+## Orchestrator HTTP API
+
+The Orchestrator exposes three HTTP endpoints:
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| POST | `/checkout` | Full checkout pipeline: verifications → enqueue → response. |
+| GET | `/catalogue` | Returns the book catalogue read directly from the quorum-backed database. |
+| POST | `/suggestions` | Returns genre-based recommendations for a given list of book titles (body: `{"book_titles": [...] }`). Used by the index page before checkout. |
+
+The `/catalogue` endpoint performs a quorum read — it tries each DB replica in order and returns the first successful response. This means the catalogue is always served from the distributed database, not a static list.
+
 ## Bonus — Concurrent Write Handling
 
-Concurrent writes to the same book are handled via optimistic concurrency control using version numbers (Compare-and-Swap). Each Read returns the current version alongside the stock value. A Write only succeeds if the submitted `expected_version` matches the current version in the database. If two orders read the same version and both attempt a Write, only one succeeds — the other receives a version mismatch error. The executor detects this conflict and retries from a fresh Read, ensuring correctness without locking. This is implemented in `books_database/src/app.py` (Write RPC) and `order_executor/src/app.py` (`_is_cas_conflict` + retry loop).
+Concurrent writes to the same book are handled via optimistic concurrency control using version numbers (Compare-and-Swap). Each Read returns the current version alongside the stock value. A Prepare only succeeds if the submitted `expected_version` matches the current version on that replica. If two orders read the same version and both attempt a Prepare, only one succeeds — the other receives a version mismatch error and votes NO, causing the coordinator to abort and retry from a fresh Read. The executor detects this via the gRPC `ABORTED` status code returned by the database (`_is_cas_conflict` + retry loop in `order_executor/src/app.py`).
 
 ## Demo Points
 
