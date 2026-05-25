@@ -2,13 +2,16 @@ import sys
 import os
 import grpc
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 FILE = __file__ if '__file__' in dir() else os.getenv('PYTHONFILE', '')
 sys.path.insert(0, os.path.join(os.path.dirname(FILE), '../../utils/pb/books_database'))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
 
 import database_pb2
 import database_pb2_grpc
+from utils.monitoring import tracer, read_latency_histo
 
 logger = logging.getLogger(__name__)
 
@@ -29,50 +32,55 @@ def quorum_read(key, local_store, peer_addresses):
     Returns:
         (value, version, found)  where value/version come from the most up-to-date replica
     """
-    results = []  # list of (value, version, found)
+    start_time = time.time()
 
-    # ── 1. Read locally (counts as one response) ──────────────────────────
-    local_value, local_version = local_store.local_read(key)
-    results.append((local_value or "", local_version, local_value is not None))
-    logger.info(f"[quorum_read] local  key={key} version={local_version}")
+    with tracer.start_as_current_span("quorum_read_db") as span:
+        span.set_attribute("db.book_id", key)
+        try:
+            results = []  # list of (value, version, found)
 
-    if len(results) >= QUORUM_SIZE:
-        # Already have quorum from local alone (only possible if QUORUM_SIZE==1,
-        # kept here for safety — won't fire with QUORUM_SIZE=2)
-        best = max(results, key=lambda r: r[1])
-        return best
-
-    # ── 2. Read from peers in parallel ────────────────────────────────────
-    def read_from_peer(addr):
-        with grpc.insecure_channel(addr) as channel:
-            stub = database_pb2_grpc.BooksDatabaseStub(channel)
-            resp = stub.LocalRead(database_pb2.ReadRequest(key=key), timeout=3)
-            logger.info(f"[quorum_read] peer={addr} key={key} version={resp.version}")
-            return resp.value, resp.version, resp.found
-
-    with ThreadPoolExecutor(max_workers=len(peer_addresses)) as executor:
-        futures = {executor.submit(read_from_peer, addr): addr for addr in peer_addresses}
-        for future in as_completed(futures):
-            addr = futures[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                logger.warning(f"[quorum_read] peer={addr} failed: {exc}")
+            # ── 1. Read locally (counts as one response) ──────────────────
+            local_value, local_version = local_store.local_read(key)
+            results.append((local_value or "", local_version, local_value is not None))
+            logger.info(f"[quorum_read] local  key={key} version={local_version}")
 
             if len(results) >= QUORUM_SIZE:
-                # Cancel remaining futures — we have enough
-                for f in futures:
-                    f.cancel()
-                break
+                best = max(results, key=lambda r: r[1])
+                return best
 
-    if len(results) < QUORUM_SIZE:
-        logger.error(f"[quorum_read] key={key} — only {len(results)} response(s), quorum not reached")
-        raise RuntimeError(f"Read quorum not reached for key '{key}': only {len(results)}/{QUORUM_SIZE} responses")
+            # ── 2. Read from peers in parallel ────────────────────────────
+            def read_from_peer(addr):
+                with grpc.insecure_channel(addr) as channel:
+                    stub = database_pb2_grpc.BooksDatabaseStub(channel)
+                    resp = stub.LocalRead(database_pb2.ReadRequest(key=key), timeout=3)
+                    logger.info(f"[quorum_read] peer={addr} key={key} version={resp.version}")
+                    return resp.value, resp.version, resp.found
 
-    # ── 3. Return the response with the highest version ───────────────────
-    best = max(results, key=lambda r: r[1])
-    logger.info(f"[quorum_read] key={key} → version={best[1]} found={best[2]}")
-    return best  # (value, version, found)
+            with ThreadPoolExecutor(max_workers=len(peer_addresses)) as executor:
+                futures = {executor.submit(read_from_peer, addr): addr for addr in peer_addresses}
+                for future in as_completed(futures):
+                    addr = futures[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        logger.warning(f"[quorum_read] peer={addr} failed: {exc}")
+
+                    if len(results) >= QUORUM_SIZE:
+                        for f in futures:
+                            f.cancel()
+                        break
+
+            if len(results) < QUORUM_SIZE:
+                logger.error(f"[quorum_read] key={key} — only {len(results)} response(s), quorum not reached")
+                raise RuntimeError(f"Read quorum not reached for key '{key}': only {len(results)}/{QUORUM_SIZE} responses")
+
+            # ── 3. Return the response with the highest version ───────────
+            best = max(results, key=lambda r: r[1])
+            logger.info(f"[quorum_read] key={key} → version={best[1]} found={best[2]}")
+            return best  # (value, version, found)
+        finally:
+            duration_ms = (time.time() - start_time) * 1000
+            read_latency_histo.record(duration_ms)
 
 
 def quorum_write(key, value, expected_version, local_store, peer_addresses):
@@ -102,6 +110,11 @@ def quorum_write(key, value, expected_version, local_store, peer_addresses):
     if success:
         acks.append(new_version)
         logger.info(f"[quorum_write] local  key={key} new_version={new_version}")
+        try:
+            from utils import monitoring
+            monitoring.set_stock(int(value))
+        except (TypeError, ValueError):
+            logger.warning(f"[quorum_write] failed to update stock gauge for key={key}")
     else:
         errors.append(f"local: version mismatch (expected {expected_version}, got {new_version})")
         logger.warning(f"[quorum_write] local write rejected: {errors[-1]}")

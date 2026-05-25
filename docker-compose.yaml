@@ -219,3 +219,31 @@ services:
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
+
+  observability:
+    image: grafana/otel-lgtm
+    ports:
+      - "3000:3000"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      - OTEL_METRIC_EXPORT_INTERVAL=1000
+    volumes:
+      # Provisioning files for Grafana (providers)
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Dashboard JSON files to be auto-imported by Grafana
+      - ./docs/grafana:/var/lib/grafana/dashboards:ro
+
+  grafana-importer:
+    image: python:3.11-slim
+    depends_on:
+      - observability
+    volumes:
+      - ./infra/grafana/import_dashboard.py:/import_dashboard.py:ro
+      - ./docs/grafana:/dashboards:ro
+    entrypoint: ["python", "/import_dashboard.py"]
+    environment:
+      - GRAFANA_URL=http://observability:3000
+      - GRAFANA_USER=admin
+      - GRAFANA_PASS=admin
+      - DASH_DIR=/dashboards

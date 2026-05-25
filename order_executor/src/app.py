@@ -9,7 +9,20 @@ import re
 import grpc
 from concurrent import futures
 
+os.environ["SERVICE_NAME"] = "order-executor"
+
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+
+from utils import monitoring
+from utils.monitoring import (
+    tracer,
+    orders_counter,
+    aborts_counter,
+    tx_latency_histo,
+    prepare_votes_counter,
+    transaction_outcomes_counter,
+)
 order_executor_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/order_executor'))
 sys.path.insert(0, order_executor_grpc_path)
 import order_executor_pb2 as order_executor
@@ -107,10 +120,32 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         self._election_in_progress = False
 
         self.nodes = parse_executor_nodes(self.id, self.port)
+        self._refresh_alive_executors_count()
         logger.info(
             f"Executor {self.id} started | nodes={self.nodes} "
             f"| db_targets={self.db_targets} | retries={self.max_db_write_retries}"
         )
+
+    def _refresh_alive_executors_count(self):
+        """
+        Update the alive executors gauge with a real heartbeat check.
+        This avoids reporting a static cluster size when one executor is down.
+        """
+        alive = 0
+        for node_id, addr in self.nodes.items():
+            if node_id == self.id:
+                alive += 1
+                continue
+            try:
+                with grpc.insecure_channel(addr) as channel:
+                    stub = order_executor_grpc.OrderExecutorStub(channel)
+                    hb = stub.Heartbeat(order_executor.HeartbeatRequest(executor_id=self.id), timeout=1)
+                    if hb.alive:
+                        alive += 1
+            except Exception:
+                continue
+
+        monitoring._alive_executors_count = alive
 
     def _get_payment_target(self):
         host = os.getenv("PAYMENT_HOST", "payment")
@@ -160,6 +195,14 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         votes = {}
         vote_lock = threading.Lock()
 
+        # --- AJOUT METRIQUE : On lance le chronomètre ---
+        start_time = time.time()
+
+        # --- AJOUT TRACE : On ouvre une Span globale pour ce processus 2PC ---
+        with tracer.start_as_current_span("run_2pc_process") as span:
+            # On ajoute des métadonnées (attributs) à notre trace pour la recherche dans Grafana
+            span.set_attribute("transaction.id", transaction_id)
+
         def prepare_db(target):
             try:
                 with grpc.insecure_channel(target) as channel:
@@ -175,6 +218,10 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                     )
                     with vote_lock:
                         votes[f'db:{target}'] = resp.vote_yes
+                    try:
+                        prepare_votes_counter.add(1, {"participant": "db", "vote": "yes" if resp.vote_yes else "no"})
+                    except Exception:
+                        logger.debug("Failed to increment prepare votes counter")
                     logger.info(
                         f"[2PC][{transaction_id}] DB {target} vote: {'YES' if resp.vote_yes else 'NO'}"
                         + (f" ({resp.error})" if not resp.vote_yes and resp.error else "")
@@ -183,6 +230,10 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                 logger.warning(f"[2PC][{transaction_id}] DB Prepare to {target} failed: {e}")
                 with vote_lock:
                     votes[f'db:{target}'] = False
+                try:
+                    prepare_votes_counter.add(1, {"participant": "db", "vote": "no"})
+                except Exception:
+                    logger.debug("Failed to increment prepare votes counter")
 
         def prepare_payment():
             try:
@@ -198,11 +249,19 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                     )
                     with vote_lock:
                         votes['payment'] = resp.vote_yes
+                    try:
+                        prepare_votes_counter.add(1, {"participant": "payment", "vote": "yes" if resp.vote_yes else "no"})
+                    except Exception:
+                        logger.debug("Failed to increment prepare votes counter")
                     logger.info(f"[2PC][{transaction_id}] Payment vote: {'YES' if resp.vote_yes else 'NO'}")
             except Exception as e:
                 logger.warning(f"[2PC][{transaction_id}] Payment Prepare failed: {e}")
                 with vote_lock:
                     votes['payment'] = False
+                try:
+                    prepare_votes_counter.add(1, {"participant": "payment", "vote": "no"})
+                except Exception:
+                    logger.debug("Failed to increment prepare votes counter")
 
         # Phase 1 — all DB replicas + payment in parallel
         logger.info(
@@ -220,12 +279,14 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
 
         # Phase 2 — Commit or Abort sent to all participants in parallel
         if all_yes:
+            span.add_event("All participants voted YES. Sending COMMIT.")
             logger.info(f"[2PC][{transaction_id}] Phase 2: All voted YES — sending Commit")
             db_reqs = [(t, database_pb2_grpc.BooksDatabaseStub,
                         database_pb2.CommitRequest(transaction_id=transaction_id)) for t in db_targets]
             pay_req = [(payment_target, payment_pb2_grpc.PaymentServiceStub,
                         payment_pb2.CommitRequest(transaction_id=transaction_id))]
         else:
+            span.add_event("At least one participant voted NO or timed out. Sending ABORT.")
             logger.info(f"[2PC][{transaction_id}] Phase 2: ABORT — votes={votes}")
             db_reqs = [(t, database_pb2_grpc.BooksDatabaseStub,
                         database_pb2.AbortRequest(transaction_id=transaction_id)) for t in db_targets]
@@ -258,12 +319,34 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         for th in threads:
             th.join()
 
+        # --- AJOUT METRIQUE : Enregistrement des métriques selon le résultat ---
+        if all_yes:
+            duration_ms = (time.time() - start_time) * 1000
+            try:
+                tx_latency_histo.record(duration_ms, {"outcome": "commit"})
+            except Exception:
+                logger.debug("Failed to record tx latency metric")
+            try:
+                transaction_outcomes_counter.add(1, {"outcome": "commit"})
+            except Exception:
+                logger.debug("Failed to increment transaction outcomes counter")
+        else:
+            try:
+                aborts_counter.add(1, {"reason": "vote_failed"})
+            except Exception:
+                logger.debug("Failed to increment aborts counter")
+            try:
+                transaction_outcomes_counter.add(1, {"outcome": "abort"})
+            except Exception:
+                logger.debug("Failed to increment transaction outcomes counter")
+
         return all_yes
 
     def execute_order(self, order):
         items = self._get_order_items(order)
         order_id = getattr(order, 'order_id', 'unknown')
         user_name = getattr(order, 'user_name', '')
+        orders_counter.add(1, {"status": "received"})
 
         for item in items:
             item_name = self._get_item_name(item)
@@ -358,6 +441,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
             self.leader_id = request.executor_id
             self.is_leader = (self.id == request.executor_id)
             self._election_in_progress = False
+            monitoring._current_leader_id = self.leader_id or 0
 
         logger.info(f"Coordinator received: leader={self.leader_id} | self.is_leader={self.is_leader}")
         return order_executor.CoordinatorResponse(executor_id=self.id, acknowledged=True)
@@ -402,6 +486,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
             self.leader_id = self.id
             self.is_leader = True
             self._election_in_progress = False
+            monitoring._current_leader_id = self.id
 
         logger.info(f"Executor {self.id}: elected as leader")
         self.broadcast_coordinator()
@@ -423,6 +508,8 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         If this executor is leader, continuously dequeue orders from order_queue.
         """
         while not self._stop_event.is_set():
+            self._refresh_alive_executors_count()
+
             with self._state_lock:
                 am_leader = self.is_leader
 
@@ -457,6 +544,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         """
         while not self._stop_event.is_set():
             time.sleep(5)
+            self._refresh_alive_executors_count()
 
             with self._state_lock:
                 am_leader = self.is_leader

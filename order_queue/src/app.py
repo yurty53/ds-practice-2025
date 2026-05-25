@@ -5,9 +5,13 @@ import threading
 import grpc
 from concurrent import futures
 
+os.environ["SERVICE_NAME"] = "order-queue"
+
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 order_queue_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/order_queue'))
 sys.path.insert(0, order_queue_grpc_path)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+from utils.monitoring import queue_size_counter
 import order_queue_pb2 as order_queue
 import order_queue_pb2_grpc as order_queue_grpc
 
@@ -27,6 +31,7 @@ class OrderQueueService(order_queue_grpc.OrderQueueServicer):
         with self.lock:
             self.queue.append(request.order)
             logger.info(f"Enqueued order {request.order.order_id} | queue size: {len(self.queue)}")
+            queue_size_counter.add(1)
         return order_queue.EnqueueResponse(success=True)
 
     def Dequeue(self, request, context):
@@ -38,6 +43,7 @@ class OrderQueueService(order_queue_grpc.OrderQueueServicer):
                 return order_queue.DequeueResponse(success=False)
             order = self.queue.pop(0)
             logger.info(f"Dequeued order {order.order_id} | queue size: {len(self.queue)}")
+            queue_size_counter.add(-1)
             return order_queue.DequeueResponse(success=True, order=order)
 
     def GetLeader(self, request, context):

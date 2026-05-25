@@ -3,10 +3,15 @@ import os
 import json
 import uuid
 
+os.environ["SERVICE_NAME"] = "orchestrator"
+
 # This set of lines are needed to import the gRPC stubs.
 # The path of the stubs is relative to the current file, or absolute inside the container.
 # Change these lines only if strictly needed.
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+
+from utils.monitoring import tracer, meter, orders_counter
 fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
 sys.path.insert(0, fraud_detection_grpc_path)
 import fraud_detection_pb2 as fraud_detection

@@ -1,5 +1,11 @@
 import os
 import sys
+
+os.environ["SERVICE_NAME"] = "payment"
+
+FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+
 import logging
 import threading
 import json
@@ -8,8 +14,6 @@ from pathlib import Path
 
 import grpc
 from concurrent import futures
-
-FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 payment_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/payment'))
 sys.path.insert(0, payment_grpc_path)
 import payment_pb2
@@ -17,8 +21,14 @@ import payment_pb2_grpc
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+from utils.monitoring import (
+    tracer,
+    orders_counter,
+    active_tx_counter,
+    tx_latency_histo,
+)
 
-# Persistance file for staged transactions
 STAGED_PAYMENTS_FILE = "/tmp/staged_payments.json"
 
 
@@ -128,11 +138,6 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
                 f"[PREPARE] ✓ Voted YES for transaction {transaction_id}. "
                 f"Staged for commit."
             )
-            '''
-            # Bonus Task : Demo crash after prepare 
-            logger.info("[DEMO] Waiting to crash...")
-            time.sleep(100)
-            '''
 
             return payment_pb2.PrepareResponse(vote_yes=True, error="")
 
@@ -145,9 +150,8 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
         - Return success
         """
         transaction_id = request.transaction_id
-
-        logger.info(f"[COMMIT] Received commit request: transaction_id={transaction_id}")
-
+            
+                    # Removed demo crash block to prevent blocking on sleep
         with self.lock:
             if transaction_id not in self.staged_transactions:
                 logger.warning(

@@ -4,6 +4,8 @@ import os
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
 sys.path.insert(0, fraud_detection_grpc_path)
+# Ensure repository root is on sys.path so `from utils import monitoring` works
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
 import fraud_detection_pb2 as fraud_detection
 import fraud_detection_pb2_grpc as fraud_detection_grpc
 
@@ -12,6 +14,8 @@ from concurrent import futures
 import logging
 import re
 from datetime import datetime
+
+from utils import monitoring
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,6 +106,10 @@ class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
 
         order = order_store[order_id]
         is_fraud, reason = check_user_fraud(order["user_name"], order["user_contact"])
+        try:
+            monitoring.fraud_checks_counter.add(1, {"check": "user"})
+        except Exception:
+            logger.debug(f"[{order_id}] Failed to increment fraud checks counter for user check")
 
         if is_fraud:
             logger.warning(f"[{order_id}] User fraud detected: {reason}")
@@ -125,6 +133,10 @@ class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
 
         order = order_store[order_id]
         is_fraud, reason = check_card_fraud(order["card_number"], order["expiration_date"])
+        try:
+            monitoring.fraud_checks_counter.add(1, {"check": "card"})
+        except Exception:
+            logger.debug(f"[{order_id}] Failed to increment fraud checks counter for card check")
 
         if is_fraud:
             logger.warning(f"[{order_id}] Card fraud detected: {reason}")

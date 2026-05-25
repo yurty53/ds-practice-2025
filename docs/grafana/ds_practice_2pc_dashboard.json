@@ -1,0 +1,209 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "datasource",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "1. Spans - Order Executor",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [
+        {
+          "query": "{ resource.service.name = \"order-executor\" }",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "filters": [],
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {} },
+      "options": {}
+    },
+    {
+      "title": "2. Spans - Database Replica",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [
+        {
+          "query": "{ resource.service.name = \"database-replica\" }",
+          "queryType": "traceql",
+          "tableType": "spans",
+          "filters": [],
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": {} },
+      "options": {}
+    },
+    {
+      "title": "3. Counters - Orders Processed",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(increase(orders_total[15m])) or vector(0)", "legendFormat": "orders / 15m", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "options": { "tooltip": { "mode": "single" } }
+    },
+    {
+      "title": "4. Counters - Payment Confirmations",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum(increase(transaction_outcomes_total{outcome=\"commit\"}[15m])) or vector(0)", "legendFormat": "commits / 15m", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } },
+      "options": { "tooltip": { "mode": "single" } }
+    },
+    {
+      "title": "5. UpDownCounter - Active 2PC Transactions (recent peak)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "max(max_over_time(active_prepared_transactions[15m])) or vector(0)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "6. UpDownCounter - Pending Queue Size (recent peak)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "max(max_over_time(current_queue_size[15m])) or vector(0)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": { "mode": "palette-classic" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 10 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "7. Histogram - 2PC Latency p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (increase(txn_2pc_latency_milliseconds_bucket[15m]))) or vector(0)", "legendFormat": "p95 2PC latency", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "tooltip": { "mode": "single" } }
+    },
+    {
+      "title": "8. Histogram - Quorum Read Latency p95",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (increase(quorum_read_latency_milliseconds_bucket[15m]))) or vector(0)", "legendFormat": "p95 quorum read", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "tooltip": { "mode": "single" } }
+    },
+    {
+      "title": "9. Asynchronous Gauge - Dune Stock (current)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "max(book_stock_level{book=\"Dune\"}) or vector(0)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 100,
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 20 },
+              { "color": "green", "value": 60 }
+            ]
+          }
+        }
+      },
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true }
+    },
+    {
+      "title": "10. Asynchronous Gauge - Alive Executors",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "max(last_over_time(bully_alive_executors{job=\"order-executor\"}[30s])) or vector(0)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 3,
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "green", "value": 3 }
+            ]
+          }
+        }
+      },
+      "options": { "showThresholdLabels": false, "showThresholdMarkers": true }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["distributed-systems", "2pc"],
+  "time": { "from": "now-15m", "to": "now" },
+  "timepicker": { "refresh_intervals": ["5s", "10s", "30s"] },
+  "timezone": "",
+  "title": "Distributed Bookshop Stack - Signals Overview",
+  "uid": "ds_practice_2pc_dashboard",
+  "version": 2
+}
