@@ -14,9 +14,17 @@ Scenario classes:
     MixedOrderUser          – mix of fraudulent and non-fraudulent orders
     ConflictingOrderUser    – concurrent orders for the same book (conflict)
     FailoverUser            – leader executor killed mid-test; measures re-election + recovery
+    CascadingFailoverUser   – two consecutive leader kills; measures both re-elections (S6)
+    QuorumDegradationUser   – database replicas stopped until write quorum is lost (S7)
 
 To run only a specific scenario:
     locust -f locustfile.py --host http://localhost:8080 --headless -u 5 -r 1 -t 30s SingleOrderUser
+
+S6 – Cascading leader failures (orchestrator on :8081 exposes GET /leader):
+    locust -f tests/locustfile.py --host http://localhost:8081 --headless -u 3 -r 3 -t 120s CascadingFailoverUser
+
+S7 – Database quorum degradation:
+    locust -f tests/locustfile.py --host http://localhost:8081 --headless -u 3 -r 3 -t 120s QuorumDegradationUser
 """
 
 import json
@@ -435,6 +443,341 @@ class FailoverUser(HttpUser):
 
 
 # ---------------------------------------------------------------------------
+# Scenario 6 – Cascading leader failures
+# ---------------------------------------------------------------------------
+
+# Shared state written by the cascading-failover thread, read by
+# CascadingFailoverUser instances to tag requests and time re-elections.
+_cascade_state = {
+    "phase": "baseline",        # baseline → first-failure → second-failure → single-node → recovering → recovered
+    "leader1": None,            # first leader killed   (expected: executor3)
+    "leader2": None,            # second leader killed  (expected: executor2)
+    "kill1_time": None,
+    "kill2_time": None,
+    "reelection1_time": None,   # wall-clock of first approval after kill1 (before kill2)
+    "reelection2_time": None,   # wall-clock of first approval after kill2
+    "lock": threading.Lock(),
+}
+
+
+def _cascade_sequence(host: str):
+    """
+    Background thread that kills two leaders in a row, then restarts both.
+
+    Timeline (seconds from test start):
+        0   – baseline (all three executors up; executor3 is leader)
+        10  – query /leader, kill it (executor3); first re-election begins
+        25  – query /leader, kill the new leader (executor2); second re-election
+        40  – executor1 is the last node standing (single-node)
+        60  – restart executor2 then executor3; cluster recovers
+    """
+    time.sleep(10)
+
+    leader1 = _get_current_leader(host)
+    with _cascade_state["lock"]:
+        _cascade_state["leader1"] = leader1
+        _cascade_state["phase"] = "first-failure"
+    print(f"\n[S6] ── PHASE: first-failure – killing leader '{leader1}' ──")
+    _docker("stop", leader1)
+    with _cascade_state["lock"]:
+        _cascade_state["kill1_time"] = time.time()
+
+    time.sleep(15)  # wait for first re-election to complete
+
+    leader2 = _get_current_leader(host)
+    with _cascade_state["lock"]:
+        _cascade_state["leader2"] = leader2
+        _cascade_state["phase"] = "second-failure"
+    print(f"\n[S6] ── PHASE: second-failure – killing new leader '{leader2}' ──")
+    _docker("stop", leader2)
+    with _cascade_state["lock"]:
+        _cascade_state["kill2_time"] = time.time()
+
+    time.sleep(15)  # wait for second re-election (executor1 last standing)
+
+    with _cascade_state["lock"]:
+        _cascade_state["phase"] = "single-node"
+    print("\n[S6] ── PHASE: single-node – executor1 last standing ──")
+
+    # Restart both at ~T+60s (we are at ~T+40s now).
+    time.sleep(20)
+
+    with _cascade_state["lock"]:
+        _cascade_state["phase"] = "recovering"
+    print(f"\n[S6] ── PHASE: recovering – restarting '{leader2}' then '{leader1}' ──")
+    _docker("start", leader2)
+    _docker("start", leader1)
+
+    with _cascade_state["lock"]:
+        _cascade_state["phase"] = "recovered"
+    print("\n[S6] ── PHASE: recovered ──")
+
+
+class CascadingFailoverUser(HttpUser):
+    """
+    Continuously sends valid orders while a background thread kills the leader
+    executor twice in a row (executor3 → executor2), leaving executor1 as the
+    sole survivor, then restarts both.
+
+    Phases tracked per-request:
+        [S6-baseline]        – before any kill; all approved
+        [S6-first-failure]   – executor3 killed; first re-election in progress
+        [S6-second-failure]  – executor2 killed; second re-election in progress
+        [S6-single-node]     – executor1 last standing; orders approved
+        [S6-recovering]      – executor2/3 restarting
+        [S6-recovered]       – cluster restored; all approved
+
+    Both re-election durations (first approval after each kill) are printed in
+    the end-of-test summary.
+
+    Run with:
+        locust -f tests/locustfile.py --host http://localhost:8081 --headless \
+               -u 3 -r 3 -t 120s CascadingFailoverUser
+    """
+    wait_time = between(1, 2)
+    _sequence_started = False
+    _sequence_lock = threading.Lock()
+
+    def on_start(self):
+        with CascadingFailoverUser._sequence_lock:
+            if not CascadingFailoverUser._sequence_started:
+                CascadingFailoverUser._sequence_started = True
+                threading.Thread(
+                    target=_cascade_sequence,
+                    args=(self.environment.host,),
+                    daemon=True,
+                ).start()
+
+    def _current_phase(self) -> str:
+        with _cascade_state["lock"]:
+            return _cascade_state["phase"]
+
+    def _maybe_record_reelection(self):
+        """Record the first approved order after each kill as the re-election time."""
+        now = time.time()
+        with _cascade_state["lock"]:
+            k1 = _cascade_state["kill1_time"]
+            k2 = _cascade_state["kill2_time"]
+            # First re-election: an approval after kill1 but before kill2.
+            if k1 and k2 is None and _cascade_state["reelection1_time"] is None:
+                _cascade_state["reelection1_time"] = now
+                print(
+                    f"\n[S6] ✓ First re-election complete – "
+                    f"{now - k1:.1f}s after killing {_cascade_state['leader1']}"
+                )
+            # Second re-election: an approval after kill2.
+            elif k2 and _cascade_state["reelection2_time"] is None:
+                _cascade_state["reelection2_time"] = now
+                print(
+                    f"\n[S6] ✓ Second re-election complete – "
+                    f"{now - k2:.1f}s after killing {_cascade_state['leader2']}"
+                )
+
+    @task
+    def order_during_cascade(self):
+        phase = self._current_phase()
+        name  = f"[S6-{phase}] order"
+        book  = random.choice(CATALOGUE_BOOKS)
+        payload = make_order([book])
+
+        with self.client.post(
+            "/checkout",
+            json=payload,
+            catch_response=True,
+            name=name,
+        ) as resp:
+            if resp.status_code != 200:
+                resp.failure(f"HTTP {resp.status_code}")
+                return
+
+            status   = resp.json().get("status", "")
+            approved = status == "Order Approved"
+
+            if approved:
+                self._maybe_record_reelection()
+
+            if phase in ("baseline", "recovered", "single-node"):
+                # A leader exists in these phases, so orders must be approved.
+                if approved:
+                    resp.success()
+                else:
+                    resp.failure(f"Expected approved in phase '{phase}', got '{status}'")
+            else:
+                # Re-election windows: approve or reject are both acceptable.
+                if status in ("Order Approved", "Order Rejected"):
+                    resp.success()
+                else:
+                    resp.failure(f"Unexpected status in phase '{phase}': {status}")
+
+
+# ---------------------------------------------------------------------------
+# Scenario 7 – Database quorum degradation
+# ---------------------------------------------------------------------------
+
+# Compose-assigned container names for the database replicas.
+_DB2 = "ds-practice-2025-database2-1"
+_DB3 = "ds-practice-2025-database3-1"
+
+_quorum_state = {
+    "phase": "baseline",        # baseline → one-down → quorum-lost → recovering → recovered
+    "quorum_lost_time": None,
+    "restart_time": None,
+    "recovery_time": None,      # first approval observed after the replicas were restarted
+    "lock": threading.Lock(),
+}
+
+
+def _quorum_sequence(host: str):
+    """
+    Background thread that degrades the database quorum step by step.
+
+    Quorum is 2-of-3 (W=2). Timeline (seconds from test start):
+        0   – baseline (3 replicas up)
+        10  – stop database3 (1 down; quorum of 2 still met → orders approved)
+        35  – stop database2 (2 down; quorum cannot be met → 2PC Prepare fails)
+        60  – restart database2 then database3; quorum restored
+    """
+    time.sleep(10)
+    with _quorum_state["lock"]:
+        _quorum_state["phase"] = "one-down"
+    print(f"\n[S7] ── PHASE: one-down – stopping '{_DB3}' (quorum still met) ──")
+    _docker("stop", _DB3)
+
+    time.sleep(25)  # until ~T+35
+    with _quorum_state["lock"]:
+        _quorum_state["phase"] = "quorum-lost"
+        _quorum_state["quorum_lost_time"] = time.time()
+    print(f"\n[S7] ── PHASE: quorum-lost – stopping '{_DB2}' (write quorum cannot be met) ──")
+    _docker("stop", _DB2)
+
+    time.sleep(25)  # until ~T+60
+    with _quorum_state["lock"]:
+        _quorum_state["phase"] = "recovering"
+        _quorum_state["restart_time"] = time.time()
+    print(f"\n[S7] ── PHASE: recovering – restarting '{_DB2}' then '{_DB3}' ──")
+    _docker("start", _DB2)
+    _docker("start", _DB3)
+
+    with _quorum_state["lock"]:
+        _quorum_state["phase"] = "recovered"
+    print("\n[S7] ── PHASE: recovered ──")
+
+
+class QuorumDegradationUser(HttpUser):
+    """
+    Continuously sends valid orders while a background thread stops database
+    replicas one at a time (3 → 2 → 1) until the write quorum is lost, then
+    restarts them.
+
+    IMPORTANT — what a checkout reply means here:
+        /checkout returns 'Order Approved' as soon as fraud/verification pass
+        and the order is *enqueued*; the 2PC stock write runs asynchronously in
+        the executor afterwards. So when the write quorum is lost, the HTTP
+        reply can still be 'Order Approved' — the 2PC Prepare failure happens
+        later and is NOT reflected in the checkout response. We therefore treat
+        the quorum-lost window as an expected-degradation window: HTTP success
+        is accepted and the reason is logged rather than failing the request.
+
+    Phases tracked per-request:
+        [S7-baseline]    – 3 replicas up; orders approved
+        [S7-one-down]    – database3 down; quorum of 2 still met; approved
+        [S7-quorum-lost] – database2+3 down; 2PC Prepare fails (async); logged, SUCCESS
+        [S7-recovering]  – replicas restarting
+        [S7-recovered]   – quorum restored; orders approved
+
+    Quorum recovery time (first approval after the replicas were restarted) is
+    printed in the end-of-test summary.
+
+    Run with:
+        locust -f tests/locustfile.py --host http://localhost:8081 --headless \
+               -u 3 -r 3 -t 120s QuorumDegradationUser
+    """
+    wait_time = between(1, 2)
+    _sequence_started = False
+    _sequence_lock = threading.Lock()
+
+    def on_start(self):
+        with QuorumDegradationUser._sequence_lock:
+            if not QuorumDegradationUser._sequence_started:
+                QuorumDegradationUser._sequence_started = True
+                threading.Thread(
+                    target=_quorum_sequence,
+                    args=(self.environment.host,),
+                    daemon=True,
+                ).start()
+
+    def _current_phase(self) -> str:
+        with _quorum_state["lock"]:
+            return _quorum_state["phase"]
+
+    def _maybe_record_recovery(self):
+        now = time.time()
+        with _quorum_state["lock"]:
+            rt = _quorum_state["restart_time"]
+            if rt and _quorum_state["recovery_time"] is None:
+                _quorum_state["recovery_time"] = now
+                print(
+                    f"\n[S7] ✓ Quorum recovered – first approved order "
+                    f"{now - rt:.1f}s after restarting replicas"
+                )
+
+    @task
+    def order_during_degradation(self):
+        phase = self._current_phase()
+        name  = f"[S7-{phase}] order"
+        book  = random.choice(CATALOGUE_BOOKS)
+        payload = make_order([book])
+
+        with self.client.post(
+            "/checkout",
+            json=payload,
+            catch_response=True,
+            name=name,
+        ) as resp:
+            if phase == "quorum-lost":
+                # Expected behaviour: mark SUCCESS and log the reason. The write
+                # quorum cannot be met, so the 2PC Prepare fails asynchronously;
+                # the enqueue-time HTTP reply may still read 'Order Approved'.
+                if resp.status_code != 200:
+                    print(
+                        f"[S7] quorum-lost: checkout HTTP {resp.status_code} "
+                        f"(expected – write quorum < 2)"
+                    )
+                else:
+                    status = resp.json().get("status", "")
+                    print(
+                        f"[S7] quorum-lost: checkout status='{status}' "
+                        f"(2PC Prepare expected to fail asynchronously – quorum < 2)"
+                    )
+                resp.success()
+                return
+
+            if resp.status_code != 200:
+                resp.failure(f"HTTP {resp.status_code}")
+                return
+
+            status   = resp.json().get("status", "")
+            approved = status == "Order Approved"
+
+            if phase in ("baseline", "one-down", "recovered"):
+                # Quorum is met in these phases, so orders must be approved.
+                if approved:
+                    resp.success()
+                    if phase == "recovered":
+                        self._maybe_record_recovery()
+                else:
+                    resp.failure(f"Expected approved in phase '{phase}', got '{status}'")
+            else:
+                # 'recovering' is transient: approve or reject are both acceptable.
+                if status in ("Order Approved", "Order Rejected"):
+                    resp.success()
+                    if approved:
+                        self._maybe_record_recovery()
+                else:
+                    resp.failure(f"Unexpected status in phase '{phase}': {status}")
+
+
+# ---------------------------------------------------------------------------
 # Event hooks – print a summary banner at test end
 # ---------------------------------------------------------------------------
 
@@ -459,5 +802,27 @@ def on_test_stop(environment, **kwargs):
         recovery_secs = f"{recover_t - kill_t:.1f}s" if recover_t else "not yet recovered"
         print(f"\n  [S5] Leader killed      : {_failover_state.get('leader_endpoint', _DEFAULT_LEADER_CONTAINER)}")
         print(f"  [S5] Recovery time      : {recovery_secs}")
+
+    # Cascading-failover summary (S6) – both re-elections timed separately
+    k1 = _cascade_state.get("kill1_time")
+    if k1:
+        k2  = _cascade_state.get("kill2_time")
+        re1 = _cascade_state.get("reelection1_time")
+        re2 = _cascade_state.get("reelection2_time")
+        re1_secs = f"{re1 - k1:.1f}s" if re1 else "not measured"
+        re2_secs = f"{re2 - k2:.1f}s" if (re2 and k2) else "not measured"
+        print(f"\n  [S6] First leader killed   : {_cascade_state.get('leader1')}")
+        print(f"  [S6] First re-election     : {re1_secs}")
+        print(f"  [S6] Second leader killed  : {_cascade_state.get('leader2')}")
+        print(f"  [S6] Second re-election    : {re2_secs}")
+
+    # Quorum-degradation summary (S7)
+    ql = _quorum_state.get("quorum_lost_time")
+    if ql:
+        rt  = _quorum_state.get("restart_time")
+        rec = _quorum_state.get("recovery_time")
+        rec_secs = f"{rec - rt:.1f}s" if (rec and rt) else "not measured"
+        print(f"\n  [S7] Quorum lost           : database2 + database3 stopped")
+        print(f"  [S7] Quorum recovery time  : {rec_secs}")
 
     print("=" * 60)

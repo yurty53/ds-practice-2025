@@ -198,10 +198,12 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         # --- AJOUT METRIQUE : On lance le chronomètre ---
         start_time = time.time()
 
-        # --- AJOUT TRACE : On ouvre une Span globale pour ce processus 2PC ---
-        with tracer.start_as_current_span("run_2pc_process") as span:
-            # On ajoute des métadonnées (attributs) à notre trace pour la recherche dans Grafana
-            span.set_attribute("transaction.id", transaction_id)
+        # --- AJOUT TRACE : Span globale couvrant tout le processus 2PC ---
+        # Entrée/sortie gérées manuellement pour englober les deux phases
+        # jusqu'au return (un simple `with` refermerait la span immédiatement).
+        span_cm = tracer.start_as_current_span("run_2pc_process")
+        span = span_cm.__enter__()
+        span.set_attribute("transaction.id", transaction_id)
 
         def prepare_db(target):
             try:
@@ -339,6 +341,9 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                 transaction_outcomes_counter.add(1, {"outcome": "abort"})
             except Exception:
                 logger.debug("Failed to increment transaction outcomes counter")
+
+        # Close the 2PC span now that both phases (and metrics) are recorded.
+        span_cm.__exit__(None, None, None)
 
         return all_yes
 

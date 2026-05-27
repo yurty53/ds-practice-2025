@@ -195,94 +195,118 @@ class BooksDatabaseServicer(database_pb2_grpc.BooksDatabaseServicer):
  
     def Prepare(self, request, context):
         """
-        Phase 1 of 2PC — Secure and permissive validation
+        Phase 1 of 2PC — lock the key and CAS-validate the caller's version.
+
+        Votes NO (without raising) when the key is already locked by another
+        transaction or when the caller's expected_version is stale. A NO vote
+        causes the coordinator to abort and retry with a fresh read.
         """
-        # 1. Extraction ultra-flexible des paramètres pour parer aux variantes de protos
-        tid = getattr(request, 'transaction_id', None) or getattr(request, 'tid', None) or "unknown_tid"
-        key = getattr(request, 'key', None) or "Dune"
-        val = getattr(request, 'value', None) or ""
-        exp_ver = getattr(request, 'expected_version', None) or getattr(request, 'version', 1)
-
+        tid     = request.transaction_id
+        key     = request.key
         node_id = os.getenv('NODE_ID', 'unknown')
-        print(f"--> [gRPC 2PC] Prepare appelé sur {node_id} | tid={tid} key={key}", flush=True)
 
+        with self._2pc_lock:
+            existing_tid = self._locks.get(key)
+            if existing_tid is not None and existing_tid != tid:
+                logger.warning(
+                    f"[{node_id}] [2PC] Prepare VOTE_NO | tid={tid} "
+                    f"key='{key}' already locked by tid={existing_tid}"
+                )
+                return database_pb2.PrepareResponse(
+                    vote_yes=False,
+                    error=f"Key '{key}' is locked by transaction {existing_tid}"
+                )
+
+            # CAS guard: reject if the caller's expected version is stale.
+            _, current_version = self.store.local_read(key)
+            if current_version != request.expected_version:
+                logger.warning(
+                    f"[{node_id}] [2PC] Prepare VOTE_NO | tid={tid} key='{key}' "
+                    f"version mismatch: expected={request.expected_version} current={current_version}"
+                )
+                return database_pb2.PrepareResponse(
+                    vote_yes=False,
+                    error=f"Version mismatch: expected {request.expected_version}, got {current_version}"
+                )
+
+            self._staged_writes[tid] = {
+                "key":              key,
+                "value":            request.value,
+                "expected_version": request.expected_version,
+            }
+            self._locks[key] = tid
+
+        # Telemetry: a transaction has entered the PREPARED state.
         try:
-            # Met à jour le compteur d'UpDown pour la télémétrie Grafana
-            try:
-                from utils import monitoring
-                monitoring.active_tx_counter.add(1)
-            except:
-                pass
+            monitoring.active_tx_counter.add(1)
+        except Exception:
+            pass
 
-            # Enregistrement en phase de staging (mémoire tampon)
-            with self._2pc_lock:
-                self._staged_writes[tid] = {
-                    "key": key,
-                    "value": val,
-                    "expected_version": exp_ver,
-                }
-                self._locks[key] = tid
+        logger.info(
+            f"[{node_id}] [2PC] Prepare VOTE_YES | tid={tid} "
+            f"key='{key}' expected_version={request.expected_version}"
+        )
+        return database_pb2.PrepareResponse(vote_yes=True, error="")
 
-            # Renvoie une réponse compatible avec TOUTES les déclinaisons de ton fichier .proto
-            try:
-                return database_pb2.PrepareResponse(vote_yes=True, success=True, error="")
-            except:
-                try:
-                    return database_pb2.PrepareResponse(vote_yes=True, error="")
-                except:
-                    return database_pb2.PrepareResponse(success=True)
-
-        except Exception as e:
-            print(f"[CRITICAL ERROR] Prepare crash local: {e}", flush=True)
-            try:
-                return database_pb2.PrepareResponse(vote_yes=False, success=False, error=str(e))
-            except:
-                return database_pb2.PrepareResponse(vote_yes=False, error=str(e))
- 
     def Commit(self, request, context):
         """
-        Phase 2 of 2PC — Apply the staging write and decrement stock
+        Phase 2 of 2PC — apply the staged write locally.
+
+        Version was validated at Prepare time and the key has stayed locked, so
+        a mismatch here is unexpected; if local_write fails we surface it with
+        gRPC status ABORTED so the coordinator can tell a CAS conflict apart
+        from other failures.
         """
-        tid = getattr(request, 'transaction_id', None) or getattr(request, 'tid', None) or "unknown_tid"
+        tid     = request.transaction_id
         node_id = os.getenv('NODE_ID', 'unknown')
-        print(f"--> [gRPC 2PC] Commit appelé sur {node_id} | tid={tid}", flush=True)
 
+        with self._2pc_lock:
+            staged = self._staged_writes.get(tid)
+
+        if staged is None:
+            logger.warning(
+                f"[{node_id}] [2PC] Commit called but no staged write for tid={tid}"
+            )
+            return database_pb2.CommitResponse(success=False)
+
+        key              = staged["key"]
+        value            = staged["value"]
+        expected_version = staged["expected_version"]
+
+        # Apply locally — version was already validated at Prepare time.
+        success, new_version = self.store.local_write(key, value, expected_version)
+
+        if not success:
+            context.set_code(grpc.StatusCode.ABORTED)
+            context.set_details(f"Version mismatch at commit: key='{key}'")
+
+        # Release lock and clean up staging regardless of outcome.
+        with self._2pc_lock:
+            self._staged_writes.pop(tid, None)
+            if self._locks.get(key) == tid:
+                del self._locks[key]
+
+        # Telemetry: transaction leaving the PREPARED state.
         try:
-            with self._2pc_lock:
-                staged = self._staged_writes.get(tid)
+            monitoring.active_tx_counter.add(-1)
+        except Exception:
+            pass
 
-            if staged is None:
-                print(f"[2PC WARNING] No staged write found for tid={tid}", flush=True)
-                return database_pb2.CommitResponse(success=True)
-
-            key = staged["key"]
-            value = staged["value"]
-            expected_version = staged["expected_version"]
-
-            # 💥 LE VRAI DÉCOMPTE : Appliqué uniquement lors du vrai commit validé
-            from utils import monitoring
-            monitoring.decrement_stock()
-
-            # Écriture définitive dans la base de données
-            self.store.local_write(key, value, expected_version)
-            print(f"[VRAI 2PC SUCCESS] Commited '{key}'. Stock restant: {monitoring.get_current_stock()}", flush=True)
-
-            # Nettoyage des verrous
-            with self._2pc_lock:
-                self._staged_writes.pop(tid, None)
-                if self._locks.get(key) == tid:
-                    del self._locks[key]
-
+        if success:
             try:
-                monitoring.active_tx_counter.add(-1)
-            except:
+                monitoring.decrement_stock()
+            except Exception:
                 pass
+            logger.info(
+                f"[{node_id}] [2PC] Commit SUCCESS | tid={tid} "
+                f"key='{key}' new_version={new_version} stock={monitoring.get_current_stock()}"
+            )
+        else:
+            logger.error(
+                f"[{node_id}] [2PC] Commit FAILED (version mismatch) | tid={tid} key='{key}'"
+            )
 
-            return database_pb2.CommitResponse(success=True)
-
-        except Exception as e:
-            print(f"[CRITICAL ERROR] Commit crash local: {e}", flush=True)
-            return database_pb2.CommitResponse(success=True)
+        return database_pb2.CommitResponse(success=success)
  
     def Abort(self, request, context):
         """

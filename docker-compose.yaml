@@ -233,6 +233,9 @@ services:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
       # Dashboard JSON files to be auto-imported by Grafana
       - ./docs/grafana:/var/lib/grafana/dashboards:ro
+      # Persist the otel-lgtm TSDB (Prometheus/Tempo/Loki/Grafana under /data)
+      # so metrics and traces survive `docker compose down`.
+      - otel-lgtm-data:/data
 
   grafana-importer:
     image: python:3.11-slim
@@ -247,3 +250,7 @@ services:
       - GRAFANA_USER=admin
       - GRAFANA_PASS=admin
       - DASH_DIR=/dashboards
+
+volumes:
+  # Named volume backing the otel-lgtm observability stack's /data directory.
+  otel-lgtm-data:
