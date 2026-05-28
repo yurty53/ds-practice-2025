@@ -56,6 +56,11 @@ DEFAULT_CATALOGUE = {
     ],
 }
 
+# Per-title stock overrides; all other titles default to 100.
+STOCK_OVERRIDES = {
+    "Dune": "10000",
+}
+
 
 def seed_initial_catalogue(store):
     """Populate the replica with the initial catalogue and stock values."""
@@ -63,7 +68,8 @@ def seed_initial_catalogue(store):
 
     for books in DEFAULT_CATALOGUE.values():
         for book in books:
-            store.local_write(book["title"], "100", 0)
+            stock = STOCK_OVERRIDES.get(book["title"], "100")
+            store.local_write(book["title"], stock, 0)
 
     monitoring._current_stock_value = 100
 
