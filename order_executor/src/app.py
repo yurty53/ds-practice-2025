@@ -417,9 +417,11 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
                     )
                     break
 
-                # Could be CAS conflict or DB vote NO — retry
+                # Could be CAS conflict or DB vote NO — retry with exponential backoff + jitter.
+                # Known limitation: processing is sequential (dequeue → full 2PC → next dequeue),
+                # so a stuck retry loop here blocks the entire queue.
                 logger.info(f"[{order_id}] 2PC failed for {item_name} attempt={attempt}/{self.max_db_write_retries}, retrying")
-                time.sleep(random.uniform(0.05, 0.2))
+                time.sleep(random.uniform(0.1, 0.5) * attempt)
             else:
                 logger.warning(f"[{order_id}] Failed to commit {item_name} after {self.max_db_write_retries} attempts")
                 return False
