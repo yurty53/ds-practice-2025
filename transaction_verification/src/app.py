@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import re
 import logging
 
@@ -11,6 +12,16 @@ import transaction_verification_pb2_grpc as transaction_verification_grpc
 
 import grpc
 from concurrent import futures
+
+# Ensure repository root is on sys.path so `from utils import monitoring` works
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+os.environ["SERVICE_NAME"] = "transaction-verification"
+from utils import monitoring
+from utils.monitoring import (
+    tracer,
+    verification_checks_counter,
+    verification_latency_histo,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,33 +77,44 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
         Verify that the order contains at least one item.
         This is Event a in the transaction verification sequence.
         """
-        order_id = request.order_id
+        with tracer.start_as_current_span("txn_verif.items") as span:
+            span.set_attribute("order.id", request.order_id)
+            start = time.perf_counter()
+            outcome = "pass"
+            try:
+                order_id = request.order_id
 
-        if order_id not in order_store or order_id not in vector_clocks:
-            reason = "Order not initialized. Call InitOrder first"
-            logger.warning(f"[Event a] Rejected: {reason} | order_id='{order_id}'")
-            return transaction_verification.VerifyResponse(
-                is_valid=False,
-                reason=reason,
-                vector_clock=dict(request.vector_clock)
-            )
+                if order_id not in order_store or order_id not in vector_clocks:
+                    reason = "Order not initialized. Call InitOrder first"
+                    logger.warning(f"[Event a] Rejected: {reason} | order_id='{order_id}'")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(
+                        is_valid=False,
+                        reason=reason,
+                        vector_clock=dict(request.vector_clock)
+                    )
 
-        vc = self._merge_vector_clock(order_id, request.vector_clock)
-        items = order_store[order_id]["items"]
-        logger.info(f"[{order_id}] Event a: VerifyItems | items: {items} | VC: {vc}")
- 
-        if not items:
-            logger.warning(f"[{order_id}] [Event a] Rejected: empty items list")
-            return transaction_verification.VerifyResponse(
-                is_valid=False,
-                reason="Order must contain at least one item",
-                vector_clock=vc
-            )
+                vc = self._merge_vector_clock(order_id, request.vector_clock)
+                items = order_store[order_id]["items"]
+                logger.info(f"[{order_id}] Event a: VerifyItems | items: {items} | VC: {vc}")
 
-        order_store[order_id]["event_a_validated"] = True
- 
-        logger.info(f"[{order_id}] [Event a] Approved: {len(items)} item(s) found")
-        return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+                if not items:
+                    logger.warning(f"[{order_id}] [Event a] Rejected: empty items list")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(
+                        is_valid=False,
+                        reason="Order must contain at least one item",
+                        vector_clock=vc
+                    )
+
+                order_store[order_id]["event_a_validated"] = True
+
+                logger.info(f"[{order_id}] [Event a] Approved: {len(items)} item(s) found")
+                return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+            finally:
+                duration_ms = (time.perf_counter() - start) * 1000
+                verification_checks_counter.add(1, {"check": "items", "outcome": outcome})
+                verification_latency_histo.record(duration_ms, {"check": "items"})
 
 
     # -----------------------------------Event b: Verify User Data------------------------------------
@@ -102,37 +124,48 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
         Checks: user_name and user_contact.
         This is Event b in the transaction verification sequence.
         """
-        order_id = request.order_id
+        with tracer.start_as_current_span("txn_verif.user") as span:
+            span.set_attribute("order.id", request.order_id)
+            start = time.perf_counter()
+            outcome = "pass"
+            try:
+                order_id = request.order_id
 
-        if order_id not in order_store or order_id not in vector_clocks:
-            reason = "Order not initialized. Call InitOrder first"
-            logger.warning(f"[Event b] Rejected: {reason} | order_id='{order_id}'")
-            return transaction_verification.VerifyResponse(
-                is_valid=False,
-                reason=reason,
-                vector_clock=dict(request.vector_clock)
-            )
+                if order_id not in order_store or order_id not in vector_clocks:
+                    reason = "Order not initialized. Call InitOrder first"
+                    logger.warning(f"[Event b] Rejected: {reason} | order_id='{order_id}'")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(
+                        is_valid=False,
+                        reason=reason,
+                        vector_clock=dict(request.vector_clock)
+                    )
 
-        vc = self._merge_vector_clock(order_id, request.vector_clock)
-        order = order_store[order_id]
-        logger.info(
-            f"[{order_id}] Event b: VerifyUserData | user_name='{order['user_name']}' user_contact='{order['user_contact']}' | VC: {vc}"
-        )
- 
-        mandatory_fields = {
-            "user_name":    order["user_name"],
-            "user_contact": order["user_contact"],
-        }
- 
-        missing = [field for field, value in mandatory_fields.items() if not value or not value.strip()]
- 
-        if missing:
-            reason = f"Missing mandatory fields: {', '.join(missing)}"
-            logger.warning(f"[{order_id}] [Event b] Rejected: {reason}")
-            return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
- 
-        logger.info(f"[{order_id}] [Event b] Approved: all user data fields are valid")
-        return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+                vc = self._merge_vector_clock(order_id, request.vector_clock)
+                order = order_store[order_id]
+                logger.info(
+                    f"[{order_id}] Event b: VerifyUserData | user_name='{order['user_name']}' user_contact='{order['user_contact']}' | VC: {vc}"
+                )
+
+                mandatory_fields = {
+                    "user_name":    order["user_name"],
+                    "user_contact": order["user_contact"],
+                }
+
+                missing = [field for field, value in mandatory_fields.items() if not value or not value.strip()]
+
+                if missing:
+                    reason = f"Missing mandatory fields: {', '.join(missing)}"
+                    logger.warning(f"[{order_id}] [Event b] Rejected: {reason}")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
+
+                logger.info(f"[{order_id}] [Event b] Approved: all user data fields are valid")
+                return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+            finally:
+                duration_ms = (time.perf_counter() - start) * 1000
+                verification_checks_counter.add(1, {"check": "user", "outcome": outcome})
+                verification_latency_histo.record(duration_ms, {"check": "user"})
     
 
     # ------------------------------------Event c: Verify Credit Card------------------------------------
@@ -142,44 +175,57 @@ class TransactionVerificationService(transaction_verification_grpc.TransactionVe
         - number: exactly 16 digits
         - expiration_date: MM/YY or MM/YYYY format
         """
-        order_id = request.order_id
+        with tracer.start_as_current_span("txn_verif.card") as span:
+            span.set_attribute("order.id", request.order_id)
+            start = time.perf_counter()
+            outcome = "pass"
+            try:
+                order_id = request.order_id
 
-        if order_id not in order_store or order_id not in vector_clocks:
-            reason = "Order not initialized. Call InitOrder first"
-            logger.warning(f"[Event c] Rejected: {reason} | order_id='{order_id}'")
-            return transaction_verification.VerifyResponse(
-                is_valid=False,
-                reason=reason,
-                vector_clock=dict(request.vector_clock)
-            )
+                if order_id not in order_store or order_id not in vector_clocks:
+                    reason = "Order not initialized. Call InitOrder first"
+                    logger.warning(f"[Event c] Rejected: {reason} | order_id='{order_id}'")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(
+                        is_valid=False,
+                        reason=reason,
+                        vector_clock=dict(request.vector_clock)
+                    )
 
-        vc = self._merge_vector_clock(order_id, request.vector_clock)
-        order = order_store[order_id]
+                vc = self._merge_vector_clock(order_id, request.vector_clock)
+                order = order_store[order_id]
 
-        if not order.get("event_a_validated", False):
-            reason = "Causal guard failed: VerifyItems (event a) must succeed before VerifyCreditCard (event c)"
-            logger.warning(f"[{order_id}] [Event c] Rejected: {reason} | VC: {vc}")
-            return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
+                if not order.get("event_a_validated", False):
+                    reason = "Causal guard failed: VerifyItems (event a) must succeed before VerifyCreditCard (event c)"
+                    logger.warning(f"[{order_id}] [Event c] Rejected: {reason} | VC: {vc}")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
 
-        logger.info(
-            f"[{order_id}] Event c: VerifyCreditCard | number='{order['card_number']}' expiry='{order['expiration_date']}' | VC: {vc}"
-        )
-    
-        # Validate card number: 16 digits (spaces/dashes stripped)
-        card_number = re.sub(r'[\s\-]', '', order["card_number"])
-        if not re.match(r'^\d{16}$', card_number):
-            reason = "Invalid card number: must be 16 digits"
-            logger.warning(f"[{order_id}] [Event c] Rejected: {reason}")
-            return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
- 
-        # Validate expiration date: MM/YY or MM/YYYY
-        if not re.match(r'^(0[1-9]|1[0-2])\/(\d{2}|\d{4})$', order["expiration_date"]):
-            reason = "Invalid expiration date: expected MM/YY or MM/YYYY"
-            logger.warning(f"[{order_id}] [Event c] Rejected: {reason}")
-            return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
- 
-        logger.info(f"[{order_id}] [Event c] Approved: credit card format is valid")
-        return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+                logger.info(
+                    f"[{order_id}] Event c: VerifyCreditCard | number='{order['card_number']}' expiry='{order['expiration_date']}' | VC: {vc}"
+                )
+
+                # Validate card number: 16 digits (spaces/dashes stripped)
+                card_number = re.sub(r'[\s\-]', '', order["card_number"])
+                if not re.match(r'^\d{16}$', card_number):
+                    reason = "Invalid card number: must be 16 digits"
+                    logger.warning(f"[{order_id}] [Event c] Rejected: {reason}")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
+
+                # Validate expiration date: MM/YY or MM/YYYY
+                if not re.match(r'^(0[1-9]|1[0-2])\/(\d{2}|\d{4})$', order["expiration_date"]):
+                    reason = "Invalid expiration date: expected MM/YY or MM/YYYY"
+                    logger.warning(f"[{order_id}] [Event c] Rejected: {reason}")
+                    outcome = "fail"
+                    return transaction_verification.VerifyResponse(is_valid=False, reason=reason, vector_clock=vc)
+
+                logger.info(f"[{order_id}] [Event c] Approved: credit card format is valid")
+                return transaction_verification.VerifyResponse(is_valid=True, reason="", vector_clock=vc)
+            finally:
+                duration_ms = (time.perf_counter() - start) * 1000
+                verification_checks_counter.add(1, {"check": "card", "outcome": outcome})
+                verification_latency_histo.record(duration_ms, {"check": "card"})
 
     def ClearOrder(self, request, context):
         order_id = request.order_id

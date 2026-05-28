@@ -115,6 +115,7 @@ services:
       - PYTHONUNBUFFERED=TRUE
       - PAYMENT_HOST=payment
       - PAYMENT_PORT=50061
+      - SERVICE_INSTANCE_ID=1
 
   executor2:
     build:
@@ -137,6 +138,7 @@ services:
       - PYTHONUNBUFFERED=TRUE
       - PAYMENT_HOST=payment
       - PAYMENT_PORT=50061
+      - SERVICE_INSTANCE_ID=2
 
   executor3:
     build:
@@ -159,6 +161,7 @@ services:
       - PYTHONUNBUFFERED=TRUE
       - PAYMENT_HOST=payment
       - PAYMENT_PORT=50061
+      - SERVICE_INSTANCE_ID=3
 
   payment:
     build:
@@ -186,6 +189,7 @@ services:
       - PYTHONFILE=/app/books_database/src/app.py
       - NODE_ID=database1
       - PEERS=database2:50055,database3:50055
+      - SERVICE_INSTANCE_ID=database1
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
@@ -201,6 +205,7 @@ services:
       - PYTHONFILE=/app/books_database/src/app.py
       - NODE_ID=database2
       - PEERS=database1:50055,database3:50055
+      - SERVICE_INSTANCE_ID=database2
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src
@@ -216,6 +221,7 @@ services:
       - PYTHONFILE=/app/books_database/src/app.py
       - NODE_ID=database3
       - PEERS=database1:50055,database2:50055
+      - SERVICE_INSTANCE_ID=database3
     volumes:
       - ./utils:/app/utils
       - ./books_database/src:/app/books_database/src

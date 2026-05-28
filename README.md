@@ -10,6 +10,8 @@ This repository contains the implementation of a distributed bookstore system fo
 - **[Testing Guide CP2](docs/TESTING_GUIDE_CP2.md)** - Test scenarios (Checkpoint #2)
 - **[Architecture CP3](docs/ARCHITECTURE_CP3.md)** - System architecture and design (Checkpoint #3)
 - **[Testing Guide CP3](docs/TESTING_GUIDE_CP3.md)** - Demo and validation steps (Checkpoint #3)
+- **[Architecture CP4](docs/ARCHITECTURE_CP4.md)** - System architecture and design (Checkpoint #4)
+- **[Testing Guide CP4](docs/TESTING_GUIDE_CP4.md)** - Demo, automated tests, telemetry walkthrough (Checkpoint #4)
 - **[Utils](utils/README.md)** - Protocol Buffer specifications
 
 ## System Architecture
@@ -64,10 +66,26 @@ The system consists of 9 service instances communicating via REST and gRPC proto
    - gRPC participant for the 2PC checkout flow
    - Persists staged transactions and supports crash recovery
 
+11. **Database 1 / 2 / 3** (Ports 50058 / 50059 / 50060 → container 50055)
+   - 3-replica KV store backing the catalogue and stock
+   - 2-of-3 write quorum; per-key CAS for concurrent writes
+   - Participates in 2PC as resource manager
+
+12. **Observability** (Grafana 3000, OTLP HTTP 4318, OTLP gRPC 4317)
+   - `grafana/otel-lgtm` stack: Grafana + Prometheus + Tempo + Loki
+   - Receives traces + metrics from every Python service over OTLP-HTTP
+   - Dashboard `Distributed Bookshop Stack - Signals Overview` is auto-imported at boot
+
 ### Communication Protocols
 
 - **Frontend ↔ Orchestrator**: REST (HTTP/JSON)
 - **Orchestrator ↔ Backend Services**: gRPC (Protocol Buffers)
+
+### Observability
+
+- Open <http://localhost:3000> (admin / admin) after `docker compose up`.
+- Dashboard JSON is at `docs/grafana/ds_practice_2pc_dashboard.json` and is auto-imported by the `grafana-importer` sidecar.
+- All Python services emit OTLP-HTTP traces + metrics to the `observability` container. Resource attributes: `service.name` and, for replicated services, `service.instance.id`.
 
 ### Key Features
 

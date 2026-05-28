@@ -22,6 +22,7 @@ from utils.monitoring import (
     tx_latency_histo,
     prepare_votes_counter,
     transaction_outcomes_counter,
+    bully_elections_started_counter,
 )
 order_executor_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/order_executor'))
 sys.path.insert(0, order_executor_grpc_path)
@@ -434,7 +435,7 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
 
         if requester_id < self.id:
             logger.info(f"Received Election from lower executor {requester_id}; replying OK and starting local election")
-            threading.Thread(target=self.start_election, daemon=True).start()
+            threading.Thread(target=self.start_election, kwargs={"trigger": "peer_request"}, daemon=True).start()
             return order_executor.ElectionResponse(executor_id=self.id, ok=True)
 
         logger.info(f"Received Election from executor {requester_id}; no takeover (self={self.id})")
@@ -455,12 +456,13 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
         """Simple liveness response."""
         return order_executor.HeartbeatResponse(executor_id=self.id, alive=True)
 
-    def start_election(self):
+    def start_election(self, trigger="unknown"):
         with self._state_lock:
             if self._election_in_progress:
                 return
             self._election_in_progress = True
 
+        bully_elections_started_counter.add(1, {"trigger": trigger})
         logger.info(f"Executor {self.id}: starting Bully election")
 
         got_ok_from_higher = False
@@ -560,13 +562,13 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
 
             if current_leader is None:
                 logger.info(f"Executor {self.id}: no known leader, triggering election")
-                self.start_election()
+                self.start_election(trigger="no_leader")
                 continue
 
             leader_addr = self.nodes.get(current_leader)
             if not leader_addr:
                 logger.warning(f"Executor {self.id}: leader address missing for {current_leader}, triggering election")
-                self.start_election()
+                self.start_election(trigger="leader_unknown")
                 continue
 
             try:
@@ -576,10 +578,10 @@ class OrderExecutorService(order_executor_grpc.OrderExecutorServicer):
 
                 if not hb.alive:
                     logger.warning(f"Executor {self.id}: leader {current_leader} not alive, triggering election")
-                    self.start_election()
+                    self.start_election(trigger="leader_dead")
             except Exception:
                 logger.warning(f"Executor {self.id}: heartbeat to leader {current_leader} failed, triggering election")
-                self.start_election()
+                self.start_election(trigger="heartbeat_timeout")
 
 
 def serve():
@@ -592,7 +594,7 @@ def serve():
     # Delay allows all peer containers to come online before Election messages are sent.
     def bootstrap():
         time.sleep(3)
-        service.start_election()
+        service.start_election(trigger="startup")
 
     threading.Thread(target=bootstrap, daemon=True).start()
 

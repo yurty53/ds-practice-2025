@@ -24,12 +24,15 @@ logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
 from utils.monitoring import (
     tracer,
-    orders_counter,
     active_tx_counter,
     tx_latency_histo,
 )
 
 STAGED_PAYMENTS_FILE = "/tmp/staged_payments.json"
+
+# Map transaction_id → time.perf_counter() at Prepare-time, so we can record
+# end-to-end Prepare→Commit/Abort duration when phase 2 lands.
+_prepare_started_at = {}
 
 
 class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
@@ -91,133 +94,161 @@ class PaymentService(payment_pb2_grpc.PaymentServiceServicer):
     def Prepare(self, request, context):
         """
         Phase 1: Prepare for commit.
-        
+
         - Validate the transaction
         - Vote YES to participate in commit
         - Persist the prepared state
         - Return VOTE_YES to coordinator
         """
-        transaction_id = request.transaction_id
-        user_name = request.user_name
-        amount = request.amount
-
-        logger.info(
-            f"[PREPARE] Received prepare request: transaction_id={transaction_id}, "
-            f"user={user_name}, amount={amount}"
-        )
-
-        with self.lock:
-            # Check if we already have this transaction
-            if transaction_id in self.staged_transactions:
-                logger.warning(
-                    f"[PREPARE] Transaction {transaction_id} already staged. "
-                    f"Status: {self.staged_transactions[transaction_id].get('status')}"
-                )
-                # Already prepared, return yes
-                return payment_pb2.PrepareResponse(vote_yes=True, error="")
-
-            # Simple validation: amount must be positive
-            if amount <= 0:
-                logger.error(f"[PREPARE] Invalid amount: {amount}")
-                return payment_pb2.PrepareResponse(
-                    vote_yes=False,
-                    error="Amount must be positive"
-                )
-
-            # Stage the transaction
-            self.staged_transactions[transaction_id] = {
-                "status": "PREPARED",
-                "amount": amount,
-                "user": user_name
-            }
-
-            # Persist to disk
-            self._persist_staged_payments()
+        with tracer.start_as_current_span("payment.prepare") as span:
+            span.set_attribute("transaction.id", request.transaction_id)
+            transaction_id = request.transaction_id
+            user_name = request.user_name
+            amount = request.amount
 
             logger.info(
-                f"[PREPARE] ✓ Voted YES for transaction {transaction_id}. "
-                f"Staged for commit."
+                f"[PREPARE] Received prepare request: transaction_id={transaction_id}, "
+                f"user={user_name}, amount={amount}"
             )
 
-            return payment_pb2.PrepareResponse(vote_yes=True, error="")
+            with self.lock:
+                # Check if we already have this transaction
+                if transaction_id in self.staged_transactions:
+                    logger.warning(
+                        f"[PREPARE] Transaction {transaction_id} already staged. "
+                        f"Status: {self.staged_transactions[transaction_id].get('status')}"
+                    )
+                    # Already prepared, return yes (idempotent — do not double-count metrics)
+                    return payment_pb2.PrepareResponse(vote_yes=True, error="")
+
+                # Simple validation: amount must be positive
+                if amount <= 0:
+                    logger.error(f"[PREPARE] Invalid amount: {amount}")
+                    return payment_pb2.PrepareResponse(
+                        vote_yes=False,
+                        error="Amount must be positive"
+                    )
+
+                # Stage the transaction
+                self.staged_transactions[transaction_id] = {
+                    "status": "PREPARED",
+                    "amount": amount,
+                    "user": user_name
+                }
+
+                # Persist to disk
+                self._persist_staged_payments()
+
+                logger.info(
+                    f"[PREPARE] ✓ Voted YES for transaction {transaction_id}. "
+                    f"Staged for commit."
+                )
+
+                # Vote YES: track active prepared transaction and start latency timer
+                active_tx_counter.add(1)
+                _prepare_started_at[transaction_id] = time.perf_counter()
+
+                return payment_pb2.PrepareResponse(vote_yes=True, error="")
 
     def Commit(self, request, context):
         """
         Phase 2: Commit the transaction.
-        
+
         - Execute the payment
         - Remove from staged transactions
         - Return success
         """
-        transaction_id = request.transaction_id
-            
-                    # Removed demo crash block to prevent blocking on sleep
-        with self.lock:
-            if transaction_id not in self.staged_transactions:
-                logger.warning(
-                    f"[COMMIT] Transaction {transaction_id} not found in staged payments. "
-                    f"It may have already been committed or aborted."
+        with tracer.start_as_current_span("payment.commit") as span:
+            span.set_attribute("transaction.id", request.transaction_id)
+            transaction_id = request.transaction_id
+
+            # Removed demo crash block to prevent blocking on sleep
+            with self.lock:
+                if transaction_id not in self.staged_transactions:
+                    logger.warning(
+                        f"[COMMIT] Transaction {transaction_id} not found in staged payments. "
+                        f"It may have already been committed or aborted."
+                    )
+                    # Consider this a success (idempotent) — pop guard makes metrics no-op
+                    start = _prepare_started_at.pop(transaction_id, None)
+                    if start is not None:
+                        tx_latency_histo.record((time.perf_counter() - start) * 1000, {"outcome": "commit"})
+                        active_tx_counter.add(-1)
+                    return payment_pb2.CommitResponse(success=True)
+
+                tx_info = self.staged_transactions[transaction_id]
+                amount = tx_info.get("amount")
+                user = tx_info.get("user")
+
+                # Execute payment (simulated)
+                logger.info(
+                    f"[COMMIT] ✓ Payment executed for order {transaction_id}: "
+                    f"user={user}, amount={amount:.2f}"
                 )
-                # Consider this a success (idempotent)
+
+                # Remove from staged transactions
+                del self.staged_transactions[transaction_id]
+
+                # Persist the updated state
+                self._persist_staged_payments()
+
+                # Record Prepare→Commit latency and decrement active tx gauge
+                start = _prepare_started_at.pop(transaction_id, None)
+                if start is not None:
+                    tx_latency_histo.record((time.perf_counter() - start) * 1000, {"outcome": "commit"})
+                    active_tx_counter.add(-1)
+
                 return payment_pb2.CommitResponse(success=True)
-
-            tx_info = self.staged_transactions[transaction_id]
-            amount = tx_info.get("amount")
-            user = tx_info.get("user")
-
-            # Execute payment (simulated)
-            logger.info(
-                f"[COMMIT] ✓ Payment executed for order {transaction_id}: "
-                f"user={user}, amount={amount:.2f}"
-            )
-
-            # Remove from staged transactions
-            del self.staged_transactions[transaction_id]
-
-            # Persist the updated state
-            self._persist_staged_payments()
-
-            return payment_pb2.CommitResponse(success=True)
 
     def Abort(self, request, context):
         """
         Phase 3 (or early abort): Rollback the transaction.
-        
+
         - Discard the prepared state
         - Remove from staged transactions
         - Return success
         """
-        transaction_id = request.transaction_id
+        with tracer.start_as_current_span("payment.abort") as span:
+            span.set_attribute("transaction.id", request.transaction_id)
+            transaction_id = request.transaction_id
 
-        logger.info(f"[ABORT] Received abort request: transaction_id={transaction_id}")
+            logger.info(f"[ABORT] Received abort request: transaction_id={transaction_id}")
 
-        with self.lock:
-            if transaction_id not in self.staged_transactions:
-                logger.warning(
-                    f"[ABORT] Transaction {transaction_id} not found in staged payments. "
-                    f"Nothing to abort."
+            with self.lock:
+                if transaction_id not in self.staged_transactions:
+                    logger.warning(
+                        f"[ABORT] Transaction {transaction_id} not found in staged payments. "
+                        f"Nothing to abort."
+                    )
+                    # Consider this a success (idempotent) — pop guard makes metrics no-op
+                    start = _prepare_started_at.pop(transaction_id, None)
+                    if start is not None:
+                        tx_latency_histo.record((time.perf_counter() - start) * 1000, {"outcome": "abort"})
+                        active_tx_counter.add(-1)
+                    return payment_pb2.AbortResponse(success=True)
+
+                tx_info = self.staged_transactions[transaction_id]
+                amount = tx_info.get("amount")
+                user = tx_info.get("user")
+
+                logger.info(
+                    f"[ABORT] ✓ Payment aborted for order {transaction_id}: "
+                    f"user={user}, amount={amount:.2f}"
                 )
-                # Consider this a success (idempotent)
+
+                # Remove from staged transactions
+                del self.staged_transactions[transaction_id]
+
+                # Persist the updated state
+                self._persist_staged_payments()
+
+                # Record Prepare→Abort latency and decrement active tx gauge
+                start = _prepare_started_at.pop(transaction_id, None)
+                if start is not None:
+                    tx_latency_histo.record((time.perf_counter() - start) * 1000, {"outcome": "abort"})
+                    active_tx_counter.add(-1)
+
                 return payment_pb2.AbortResponse(success=True)
-
-            tx_info = self.staged_transactions[transaction_id]
-            amount = tx_info.get("amount")
-            user = tx_info.get("user")
-
-            logger.info(
-                f"[ABORT] ✓ Payment aborted for order {transaction_id}: "
-                f"user={user}, amount={amount:.2f}"
-            )
-
-            # Remove from staged transactions
-            del self.staged_transactions[transaction_id]
-
-            # Persist the updated state
-            self._persist_staged_payments()
-
-        
-
-            return payment_pb2.AbortResponse(success=True)
 
 
 def serve():

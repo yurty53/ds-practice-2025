@@ -69,10 +69,13 @@ try:
 
     # Dynamic service identifier comes from environment in each container
     SERVICE_IDENTIFIER = os.getenv("SERVICE_NAME", "bookstore-service")
+    INSTANCE_ID = os.getenv("SERVICE_INSTANCE_ID")
 
-    resource = Resource.create(attributes={
-        SERVICE_NAME: SERVICE_IDENTIFIER
-    })
+    _resource_attrs = {SERVICE_NAME: SERVICE_IDENTIFIER}
+    if INSTANCE_ID:
+        _resource_attrs["service.instance.id"] = INSTANCE_ID
+
+    resource = Resource.create(attributes=_resource_attrs)
 
     # Traces
     tracerProvider = TracerProvider(resource=resource)
@@ -177,6 +180,34 @@ fraud_checks_counter = meter.create_counter(
     "fraud_checks_total",
     description="Total fraud checks executed"
 )
+checkout_requests_counter = meter.create_counter(
+    "checkout_requests_total",
+    description="Total /checkout requests by final outcome"
+)
+fraud_rejections_counter = meter.create_counter(
+    "fraud_rejections_total",
+    description="Fraud checks that rejected a transaction"
+)
+verification_checks_counter = meter.create_counter(
+    "verification_checks_total",
+    description="Transaction verification check outcomes"
+)
+suggestions_served_counter = meter.create_counter(
+    "suggestions_served_total",
+    description="Suggestion responses returned"
+)
+enqueue_total = meter.create_counter(
+    "order_queue_enqueue_total",
+    description="Successful enqueue operations on order_queue"
+)
+dequeue_total = meter.create_counter(
+    "order_queue_dequeue_total",
+    description="Successful dequeue operations on order_queue"
+)
+bully_elections_started_counter = meter.create_counter(
+    "bully_elections_started_total",
+    description="Bully leader elections initiated"
+)
 
 # Up/down counters
 active_tx_counter = meter.create_up_down_counter(
@@ -198,6 +229,16 @@ read_latency_histo = meter.create_histogram(
     "quorum_read_latency",
     unit="ms",
     description="Database Quorum Read response time"
+)
+verification_latency_histo = meter.create_histogram(
+    "verification_latency",
+    unit="ms",
+    description="Transaction verification RPC latency"
+)
+suggestion_latency_histo = meter.create_histogram(
+    "suggestion_latency",
+    unit="ms",
+    description="Suggestions RPC latency"
 )
 
 # Observable gauges (shared state variables)

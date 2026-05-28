@@ -15,7 +15,9 @@ import logging
 import re
 from datetime import datetime
 
+os.environ["SERVICE_NAME"] = "fraud-detection"
 from utils import monitoring
+from utils.monitoring import tracer, fraud_rejections_counter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,58 +98,71 @@ class FraudDetectionService(fraud_detection_grpc.FraudDetectionServiceServicer):
         return fraud_detection.InitOrderResponse(success=True)
 
     def CheckUserFraud(self, request, context):
-        order_id = request.order_id
+        with tracer.start_as_current_span("fraud.check_user") as span:
+            order_id = request.order_id
+            span.set_attribute("order.id", order_id)
 
-        # Merge incoming vector clock and increment own
-        vc = dict(request.vector_clock)
-        vc[SERVICE_NAME] = max(vc.get(SERVICE_NAME, 0), vector_clocks[order_id][SERVICE_NAME]) + 1
-        vector_clocks[order_id] = vc
-        logger.info(f"[{order_id}] Event d: CheckUserFraud | VC: {vc}")
+            # Merge incoming vector clock and increment own
+            vc = dict(request.vector_clock)
+            vc[SERVICE_NAME] = max(vc.get(SERVICE_NAME, 0), vector_clocks[order_id][SERVICE_NAME]) + 1
+            vector_clocks[order_id] = vc
+            logger.info(f"[{order_id}] Event d: CheckUserFraud | VC: {vc}")
 
-        order = order_store[order_id]
-        is_fraud, reason = check_user_fraud(order["user_name"], order["user_contact"])
-        try:
-            monitoring.fraud_checks_counter.add(1, {"check": "user"})
-        except Exception:
-            logger.debug(f"[{order_id}] Failed to increment fraud checks counter for user check")
+            order = order_store[order_id]
+            is_fraud, reason = check_user_fraud(order["user_name"], order["user_contact"])
+            try:
+                monitoring.fraud_checks_counter.add(1, {"check": "user"})
+            except Exception:
+                logger.debug(f"[{order_id}] Failed to increment fraud checks counter for user check")
 
-        if is_fraud:
-            logger.warning(f"[{order_id}] User fraud detected: {reason}")
-        else:
-            logger.info(f"[{order_id}] User fraud check passed")
+            if is_fraud:
+                logger.warning(f"[{order_id}] User fraud detected: {reason}")
+                try:
+                    fraud_rejections_counter.add(1, {"check": "user", "reason": "invalid_user"})
+                except Exception:
+                    logger.debug(f"[{order_id}] Failed to increment fraud rejections counter for user check")
+            else:
+                logger.info(f"[{order_id}] User fraud check passed")
 
-        return fraud_detection.FraudEventResponse(
-            is_fraud=is_fraud,
-            reason=reason,
-            vector_clock=vc
-        )
+            return fraud_detection.FraudEventResponse(
+                is_fraud=is_fraud,
+                reason=reason,
+                vector_clock=vc
+            )
 
     def CheckCreditCardFraud(self, request, context):
-        order_id = request.order_id
+        with tracer.start_as_current_span("fraud.check_card") as span:
+            order_id = request.order_id
+            span.set_attribute("order.id", order_id)
 
-        # Merge incoming vector clock and increment own
-        vc = dict(request.vector_clock)
-        vc[SERVICE_NAME] = max(vc.get(SERVICE_NAME, 0), vector_clocks[order_id][SERVICE_NAME]) + 1
-        vector_clocks[order_id] = vc
-        logger.info(f"[{order_id}] Event e: CheckCreditCardFraud | VC: {vc}")
+            # Merge incoming vector clock and increment own
+            vc = dict(request.vector_clock)
+            vc[SERVICE_NAME] = max(vc.get(SERVICE_NAME, 0), vector_clocks[order_id][SERVICE_NAME]) + 1
+            vector_clocks[order_id] = vc
+            logger.info(f"[{order_id}] Event e: CheckCreditCardFraud | VC: {vc}")
 
-        order = order_store[order_id]
-        is_fraud, reason = check_card_fraud(order["card_number"], order["expiration_date"])
-        try:
-            monitoring.fraud_checks_counter.add(1, {"check": "card"})
-        except Exception:
-            logger.debug(f"[{order_id}] Failed to increment fraud checks counter for card check")
+            order = order_store[order_id]
+            is_fraud, reason = check_card_fraud(order["card_number"], order["expiration_date"])
+            try:
+                monitoring.fraud_checks_counter.add(1, {"check": "card"})
+            except Exception:
+                logger.debug(f"[{order_id}] Failed to increment fraud checks counter for card check")
 
-        if is_fraud:
-            logger.warning(f"[{order_id}] Card fraud detected: {reason}")
-        else:
-            logger.info(f"[{order_id}] Card fraud check passed")
+            if is_fraud:
+                logger.warning(f"[{order_id}] Card fraud detected: {reason}")
+                rej_reason = "luhn_failed" if "Luhn" in reason else "expired_card"
+                try:
+                    fraud_rejections_counter.add(1, {"check": "card", "reason": rej_reason})
+                except Exception:
+                    logger.debug(f"[{order_id}] Failed to increment fraud rejections counter for card check")
+            else:
+                logger.info(f"[{order_id}] Card fraud check passed")
 
-        return fraud_detection.FraudEventResponse(
-            is_fraud=is_fraud,
-            reason=reason,
-            vector_clock=vc
-        )
+            return fraud_detection.FraudEventResponse(
+                is_fraud=is_fraud,
+                reason=reason,
+                vector_clock=vc
+            )
 
     def ClearOrder(self, request, context):
         order_id = request.order_id

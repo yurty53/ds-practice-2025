@@ -176,7 +176,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "expr": "max(last_over_time(bully_alive_executors{job=\"order-executor\"}[30s])) or vector(0)", "refId": "A" }
+        { "expr": "max(last_over_time(bully_alive_executors[30s])) or vector(0)", "refId": "A" }
       ],
       "fieldConfig": {
         "defaults": {
@@ -194,6 +194,60 @@
         }
       },
       "options": { "showThresholdLabels": false, "showThresholdMarkers": true }
+    },
+    {
+      "title": "11. Counter - Fraud Rejection Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(fraud_rejections_total[5m])) / clamp_min(sum(rate(fraud_checks_total[5m])), 1)",
+          "legendFormat": "rejection rate",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "options": { "tooltip": { "mode": "single" } }
+    },
+    {
+      "title": "12. Counter - Prepare Vote Split (by participant, vote)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "expr": "sum by (participant, vote) (increase(prepare_votes_total[5m]))",
+          "legendFormat": "{{participant}} / {{vote}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "stacking": { "mode": "normal" } } } },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+    {
+      "title": "13. Async Gauge - Current Leader & Transitions",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "last_over_time(current_leader_id[1m])", "legendFormat": "current leader id", "refId": "A" },
+        { "expr": "sum(changes(current_leader_id[5m])) or vector(0)", "legendFormat": "transitions / 5m", "refId": "B" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "background" }
     }
   ],
   "refresh": "5s",
@@ -205,5 +259,5 @@
   "timezone": "",
   "title": "Distributed Bookshop Stack - Signals Overview",
   "uid": "ds_practice_2pc_dashboard",
-  "version": 2
+  "version": 3
 }

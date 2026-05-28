@@ -11,7 +11,7 @@ os.environ["SERVICE_NAME"] = "orchestrator"
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
 
-from utils.monitoring import tracer, meter, orders_counter
+from utils.monitoring import tracer, checkout_requests_counter
 fraud_detection_grpc_path = os.path.abspath(os.path.join(FILE, '../../../utils/pb/fraud_detection'))
 sys.path.insert(0, fraud_detection_grpc_path)
 import fraud_detection_pb2 as fraud_detection
@@ -503,75 +503,96 @@ def checkout(order_data):
 
     Flow: d and c, then e with merged VC(vc_c, vc_d), then f with VC from e.
     """
-    logger.info(f"Checkout request received | items: {order_data.get('items')}")
+    with tracer.start_as_current_span("checkout_request") as root_span:
+        logger.info(f"Checkout request received | items: {order_data.get('items')}")
 
-    user            = order_data.get('user', {})
-    items           = [item.get('name', '') for item in order_data.get('items', [])]
-    order_id        = str(uuid.uuid4())
+        user            = order_data.get('user', {})
+        items           = [item.get('name', '') for item in order_data.get('items', [])]
+        order_id        = str(uuid.uuid4())
+        root_span.set_attribute("order.id", order_id)
+        root_span.set_attribute("order.items", len(order_data.get('items', [])))
 
-    try:
-        init_all_services(order_id, order_data)
-    except Exception as exc:
-        logger.warning(f"Checkout initialization failed: {exc}")
-        return {
-            'orderId': order_id,
-            'status': 'Order Rejected',
-            'suggestedBooks': [],
-            'vectorClock': order_vc.get(order_id, {})
-        }
-    
-    logger.info(f"Processing checkout | user: {user.get('name')} | items: {items}")
-
-    try:
-        vc_d = run_event_d(order_id)
-        vc_c = run_event_c(order_id)
-
-        logger.info(f"[{order_id}] Merging VC for Event e from vc_c={vc_c} and vc_d={vc_d}")
-        vc_e = run_event_e(order_id, vc_c, vc_d)
-
-        suggested_books, final_vc = run_event_f(order_id, items, vc_e)
-    except Exception as exc:
-        logger.warning(f"Checkout failed in causal flow: {exc}")
-        order_status_response = {
-            'orderId': order_id,
-            'status': 'Order Rejected',
-            'suggestedBooks': [],
-            'vectorClock': order_vc.get(order_id, {})
-        }
-    else:
-        logger.info("Order approved")
-
-        # Enqueue the order for processing by leader service
         try:
-            with grpc.insecure_channel('order_queue:50054') as channel:
-                queue_stub = order_queue_grpc.OrderQueueStub(channel)
-                queue_stub.Enqueue(order_queue.EnqueueRequest(
-                    order=order_queue.Order(
-                        order_id=order_id,
-                        items=[
-                            order_queue.OrderItem(name=item)
-                            for item in items
-                        ],
-                        user_name=user.get('name', ''),
-                        user_contact=user.get('contact', ''),
-                    )
-                ))
-                logger.info(f"[{order_id}] Order enqueued successfully")
+            init_all_services(order_id, order_data)
         except Exception as exc:
-            logger.warning(f"[{order_id}] Failed to enqueue order: {exc}")
+            logger.warning(f"Checkout initialization failed: {exc}")
+            root_span.set_attribute("checkout.outcome", "rejected")
+            checkout_requests_counter.add(1, {"outcome": "rejected"})
+            return {
+                'orderId': order_id,
+                'status': 'Order Rejected',
+                'suggestedBooks': [],
+                'vectorClock': order_vc.get(order_id, {})
+            }
 
-        order_status_response = {
-            'orderId': order_id,
-            'status': 'Order Approved',
-            'suggestedBooks': suggested_books,
-            'vectorClock': final_vc,
-        }
-    
-    finally:
-        broadcast_clear_order(order_id)
-        order_vc.pop(order_id, None)
+        logger.info(f"Processing checkout | user: {user.get('name')} | items: {items}")
 
-    return order_status_response
+        try:
+            with tracer.start_as_current_span("fraud_check") as fraud_span:
+                fraud_span.set_attribute("order.id", order_id)
+                vc_d = run_event_d(order_id)
+
+            with tracer.start_as_current_span("txn_verification") as txn_span:
+                txn_span.set_attribute("order.id", order_id)
+                vc_c = run_event_c(order_id)
+
+            logger.info(f"[{order_id}] Merging VC for Event e from vc_c={vc_c} and vc_d={vc_d}")
+            with tracer.start_as_current_span("fraud_check_card") as fraud_card_span:
+                fraud_card_span.set_attribute("order.id", order_id)
+                vc_e = run_event_e(order_id, vc_c, vc_d)
+
+            with tracer.start_as_current_span("suggestions_fetch") as sugg_span:
+                sugg_span.set_attribute("order.id", order_id)
+                suggested_books, final_vc = run_event_f(order_id, items, vc_e)
+        except Exception as exc:
+            logger.warning(f"Checkout failed in causal flow: {exc}")
+            root_span.set_attribute("checkout.outcome", "rejected")
+            checkout_requests_counter.add(1, {"outcome": "rejected"})
+            order_status_response = {
+                'orderId': order_id,
+                'status': 'Order Rejected',
+                'suggestedBooks': [],
+                'vectorClock': order_vc.get(order_id, {})
+            }
+        else:
+            logger.info("Order approved")
+
+            # Enqueue the order for processing by leader service
+            with tracer.start_as_current_span("enqueue_order") as enqueue_span:
+                enqueue_span.set_attribute("order.id", order_id)
+                try:
+                    with grpc.insecure_channel('order_queue:50054') as channel:
+                        queue_stub = order_queue_grpc.OrderQueueStub(channel)
+                        queue_stub.Enqueue(order_queue.EnqueueRequest(
+                            order=order_queue.Order(
+                                order_id=order_id,
+                                items=[
+                                    order_queue.OrderItem(name=item)
+                                    for item in items
+                                ],
+                                user_name=user.get('name', ''),
+                                user_contact=user.get('contact', ''),
+                            )
+                        ))
+                        logger.info(f"[{order_id}] Order enqueued successfully")
+                except Exception as exc:
+                    logger.warning(f"[{order_id}] Failed to enqueue order: {exc}")
+                    enqueue_span.set_attribute("enqueue.error", str(exc))
+
+            root_span.set_attribute("checkout.outcome", "approved")
+            checkout_requests_counter.add(1, {"outcome": "approved"})
+            order_status_response = {
+                'orderId': order_id,
+                'status': 'Order Approved',
+                'suggestedBooks': suggested_books,
+                'vectorClock': final_vc,
+            }
+
+        finally:
+            broadcast_clear_order(order_id)
+            order_vc.pop(order_id, None)
+
+        return order_status_response
 
 
 @app.route('/leader', methods=['GET'])

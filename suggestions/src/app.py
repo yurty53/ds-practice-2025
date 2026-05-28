@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 import logging
 
 FILE = __file__ if '__file__' in globals() else os.getenv("PYTHONFILE", "")
@@ -10,6 +11,16 @@ import suggestions_pb2_grpc as suggestions_grpc
 
 import grpc
 from concurrent import futures
+
+# Ensure repository root is on sys.path so `from utils import monitoring` works
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(FILE), '..', '..')))
+os.environ["SERVICE_NAME"] = "suggestions"
+from utils import monitoring
+from utils.monitoring import (
+    tracer,
+    suggestions_served_counter,
+    suggestion_latency_histo,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,41 +96,49 @@ class SuggestionsService(suggestions_grpc.SuggestionsServiceServicer):
         Get book recommendations based on cart contents.
         Algorithm: find genres of cart books, suggest other books from same genres.
         """
-        order_id = getattr(request, 'order_id', '')
-        cart_titles = set(request.book_titles)
+        with tracer.start_as_current_span("suggestions.get") as span:
+            span.set_attribute("order.id", getattr(request, 'order_id', ''))
+            start = time.perf_counter()
+            try:
+                order_id = getattr(request, 'order_id', '')
+                cart_titles = set(request.book_titles)
 
-        # Merge incoming VC and increment own counter (event f)
-        vc = dict(request.vector_clock)
-        local_counter = vector_clocks.get(order_id, {}).get(SERVICE_NAME, 0)
-        vc[SERVICE_NAME] = max(local_counter, vc.get(SERVICE_NAME, 0)) + 1
-        if order_id in vector_clocks:
-            vector_clocks[order_id] = vc
+                # Merge incoming VC and increment own counter (event f)
+                vc = dict(request.vector_clock)
+                local_counter = vector_clocks.get(order_id, {}).get(SERVICE_NAME, 0)
+                vc[SERVICE_NAME] = max(local_counter, vc.get(SERVICE_NAME, 0)) + 1
+                if order_id in vector_clocks:
+                    vector_clocks[order_id] = vc
 
-        logger.info(f"[{order_id}] Event f: GetSuggestions | cart: {list(cart_titles)} | VC: {vc}")
+                logger.info(f"[{order_id}] Event f: GetSuggestions | cart: {list(cart_titles)} | VC: {vc}")
 
-        # Identify genres of books in cart
-        genres = set()
-        for title in cart_titles:
-            if title in TITLE_TO_GENRE:
-                genres.add(TITLE_TO_GENRE[title])
+                # Identify genres of books in cart
+                genres = set()
+                for title in cart_titles:
+                    if title in TITLE_TO_GENRE:
+                        genres.add(TITLE_TO_GENRE[title])
 
-        logger.info(f"[{order_id}] Detected genres: {genres}")
+                logger.info(f"[{order_id}] Detected genres: {genres}")
 
-        # Find suggestions from same genres, excluding cart items
-        suggested = []
-        for genre in genres:
-            for book in CATALOGUE[genre]:
-                if book["title"] not in cart_titles:
-                    suggested.append(suggestions.Book(
-                        title=book["title"],
-                        author=book["author"]
-                    ))
+                # Find suggestions from same genres, excluding cart items
+                suggested = []
+                for genre in genres:
+                    for book in CATALOGUE[genre]:
+                        if book["title"] not in cart_titles:
+                            suggested.append(suggestions.Book(
+                                title=book["title"],
+                                author=book["author"]
+                            ))
 
-        logger.info(f"[{order_id}] Returning {len(suggested)} suggestions")
-        return suggestions.SuggestionsResponse(
-            books=suggested,
-            vector_clock=vc
-        )
+                logger.info(f"[{order_id}] Returning {len(suggested)} suggestions")
+                return suggestions.SuggestionsResponse(
+                    books=suggested,
+                    vector_clock=vc
+                )
+            finally:
+                duration_ms = (time.perf_counter() - start) * 1000
+                suggestions_served_counter.add(1)
+                suggestion_latency_histo.record(duration_ms)
 
     def ClearOrder(self, request, context):
         order_id = request.order_id
